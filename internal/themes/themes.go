@@ -120,17 +120,35 @@ func (s Style) BorderTop() lipgloss.Style {
 }
 
 func (s Style) UserBox() lipgloss.Style {
-	return lipgloss.NewStyle().
+	style := lipgloss.NewStyle().
 		Background(s.theme.UserMsgBg.Color()).
 		PaddingLeft(2).PaddingRight(2).
 		MarginBottom(s.theme.MessageMargin)
+
+	if s.theme.Name == "cyberpunk" {
+		style = style.BorderStyle(lipgloss.ThickBorder()).
+			BorderForeground(s.theme.Accent.Color()).
+			BorderLeft(true).
+			PaddingLeft(1)
+	}
+
+	return style
 }
 
 func (s Style) AssistantBox() lipgloss.Style {
-	return lipgloss.NewStyle().
+	style := lipgloss.NewStyle().
 		Background(s.theme.AssistantBg.Color()).
 		PaddingLeft(2).PaddingRight(2).
 		MarginBottom(s.theme.MessageMargin)
+
+	if s.theme.Name == "cyberpunk" {
+		style = style.BorderStyle(lipgloss.ThickBorder()).
+			BorderForeground(s.theme.Bordered.Color()).
+			BorderLeft(true).
+			PaddingLeft(1)
+	}
+
+	return style
 }
 
 func (s Style) NoticeBox(level string) lipgloss.Style {
