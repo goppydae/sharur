@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/agent"
 )
 
 func (m *model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {

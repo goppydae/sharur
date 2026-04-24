@@ -2,7 +2,7 @@ package interactive
 
 import (
 	"encoding/json"
-	"gollm/internal/session"
+	"github.com/goppydae/gollm/internal/session"
 )
 
 func (m *model) saveSession() error {

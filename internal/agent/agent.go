@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"gollm/internal/events"
-	"gollm/internal/llm"
-	"gollm/internal/tools"
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/events"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 // Event represents an agent lifecycle event.

@@ -3,8 +3,8 @@ package config
 import (
 	"strings"
 
-	"gollm/internal/llm"
-	"gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/tools"
 )
 
 // BuildProvider creates an llm.Provider based on the configuration.

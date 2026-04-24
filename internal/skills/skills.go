@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gollm/internal/config"
+	"github.com/goppydae/gollm/internal/config"
 )
 
 // Skill represents a parsed skill definition.

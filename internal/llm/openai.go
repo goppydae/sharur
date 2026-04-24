@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 // OpenAIProvider implements the Provider interface for OpenAI-compatible APIs.

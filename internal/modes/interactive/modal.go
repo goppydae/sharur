@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"gollm/internal/agent"
-	"gollm/internal/session"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/session"
 
 	lipgloss "charm.land/lipgloss/v2"
 )

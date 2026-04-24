@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"os"
 
-	"gollm/internal/agent"
-	"gollm/internal/llm"
-	"gollm/internal/session"
-	"gollm/internal/tools"
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/session"
+	"github.com/goppydae/gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 // NewRPCHandler creates an RPC mode handler.

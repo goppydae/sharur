@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 // message is an alias so we can use types.Message in JSONL without an import cycle.

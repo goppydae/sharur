@@ -4,7 +4,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/types"
 	"time"
 )
 

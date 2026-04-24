@@ -6,12 +6,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"gollm/internal/agent"
-	"gollm/internal/config"
-	"gollm/internal/llm"
-	"gollm/internal/session"
-	"gollm/internal/themes"
-	"gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/config"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/session"
+	"github.com/goppydae/gollm/internal/themes"
+	"github.com/goppydae/gollm/internal/tools"
 )
 
 // Options holds optional startup options for interactive mode.

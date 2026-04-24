@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 const anthropicAPIVersion = "2023-07-01"

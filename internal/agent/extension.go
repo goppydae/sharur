@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/tools"
 )
 
 // Extension is the unified interface for all extensions (gRPC plugins, Markdown Skills, etc.)

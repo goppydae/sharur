@@ -20,10 +20,10 @@
 package sdk
 
 import (
-	"gollm/internal/agent"
-	"gollm/internal/llm"
-	"gollm/internal/tools"
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 // Re-export core types so consumers import only this package.

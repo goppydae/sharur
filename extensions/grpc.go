@@ -7,9 +7,9 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
-	"gollm/extensions/proto"
-	"gollm/internal/agent"
-	"gollm/internal/tools"
+	"github.com/goppydae/gollm/extensions/proto"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/tools"
 )
 
 // HandshakeConfig is the agreed upon handshake for gollm extensions.

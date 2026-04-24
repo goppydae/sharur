@@ -11,9 +11,9 @@ import (
 	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
 
-	"gollm/internal/config"
-	"gollm/internal/prompts"
-	"gollm/internal/skills"
+	"github.com/goppydae/gollm/internal/config"
+	"github.com/goppydae/gollm/internal/prompts"
+	"github.com/goppydae/gollm/internal/skills"
 	"sort"
 )
 

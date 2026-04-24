@@ -8,14 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gollm/internal/agent"
-	"gollm/internal/config"
-	"gollm/internal/llm"
-	"gollm/internal/prompts"
-	"gollm/internal/session"
-	"gollm/internal/skills"
-	"gollm/internal/tools"
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/config"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/prompts"
+	"github.com/goppydae/gollm/internal/session"
+	"github.com/goppydae/gollm/internal/skills"
+	"github.com/goppydae/gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 // slashCommand represents a parsed slash command.

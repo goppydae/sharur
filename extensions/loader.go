@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/go-plugin"
 
-	"gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/agent"
 )
 
 // Loader discovers and loads extensions (executable binaries and scripts).

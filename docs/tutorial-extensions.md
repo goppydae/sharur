@@ -101,7 +101,7 @@ import (
 
     // Import the glm extension proto from your vendored copy or replace
     // with the generated types from gollm/extensions/proto
-    proto "gollm/extensions/proto"
+    proto "github.com/goppydae/gollm/extensions/proto"
 )
 
 // GitContextExtension injects the current git branch and recent commits

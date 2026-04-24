@@ -222,7 +222,7 @@ Register external tools and lifecycle hooks via gRPC. See [`extensions/`](extens
 Embed a `gollm` agent directly in your Go application:
 
 ```go
-import "gollm/sdk"
+import "github.com/goppydae/gollm/sdk"
 
 ag, err := sdk.NewAgent(sdk.Config{
     Provider: "ollama",

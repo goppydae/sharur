@@ -12,10 +12,10 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 
-	"gollm/internal/agent"
-	"gollm/internal/config"
-	"gollm/internal/session"
-	"gollm/internal/themes"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/config"
+	"github.com/goppydae/gollm/internal/session"
+	"github.com/goppydae/gollm/internal/themes"
 )
 
 // Layout constants.

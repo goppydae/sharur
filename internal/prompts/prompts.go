@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gollm/internal/config"
+	"github.com/goppydae/gollm/internal/config"
 )
 
 // Prompt represents a parsed prompt template.

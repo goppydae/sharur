@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/agent"
 )
 
 func formatToolCall(tc *agent.ToolCall) map[string]any {

@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"gollm/internal/agent"
-	"gollm/internal/config"
-	"gollm/internal/llm"
-	"gollm/internal/modes/interactive"
-	"gollm/internal/session"
-	"gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/config"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/modes/interactive"
+	"github.com/goppydae/gollm/internal/session"
+	"github.com/goppydae/gollm/internal/tools"
 )
 
 // Handler is the interface for mode implementations.

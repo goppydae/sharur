@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"gollm/internal/llm"
-	"gollm/internal/tools"
-	"gollm/internal/types"
+	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 // runTurn is the core agentic loop: prompt → LLM → tools → LLM → ... until no more tool calls.

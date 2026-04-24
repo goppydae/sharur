@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package proto;
 
-option go_package = "gollm/extensions/proto";
+option go_package = "github.com/goppydae/gollm/extensions/proto";
 
 service Extension {
   rpc Name(Empty) returns (NameResponse);
