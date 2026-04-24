@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -153,17 +154,23 @@ func searchGrep(root, pattern, glob string, before, after, maxMatches int) (stri
 		files = patterns
 	} else {
 		// Walk directory
-		_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
+		if walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				log.Printf("grep: walk error at %s: %v", path, err)
 				return nil
 			}
-			// Skip binary and vendor directories
+			if info.IsDir() {
+				return nil
+			}
+			// Skip vendor and VCS directories
 			if strings.Contains(path, "/vendor/") || strings.Contains(path, "/.git/") {
 				return nil
 			}
 			files = append(files, path)
 			return nil
-		})
+		}); walkErr != nil {
+			return "", fmt.Errorf("walk %s: %w", root, walkErr)
+		}
 	}
 
 	for _, file := range files {
@@ -225,10 +232,7 @@ func grepFile(file string, re *regexp.Regexp, before, after, maxMatches int) (st
 
 	var results strings.Builder
 	for _, m := range matches {
-
-		fmt.Fprintf(&results, "%d:", m.lineNum)
-		results.WriteString(m.content)
-		results.WriteString("\n")
+		fmt.Fprintf(&results, "%d: %s\n", m.lineNum, m.content)
 	}
 
 	return results.String(), len(matches), nil

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/goppydae/gollm/internal/llm"
@@ -8,22 +9,37 @@ import (
 )
 
 // BuildProvider creates an llm.Provider based on the configuration.
-func BuildProvider(cfg *Config) llm.Provider {
+// It returns an error if a required API key for the chosen provider is missing.
+func BuildProvider(cfg *Config) (llm.Provider, error) {
 	switch cfg.Provider {
 	case "openai":
-		return llm.NewOpenAIProviderWithKey(cfg.OpenAIBaseURL, cfg.Model, cfg.OpenAIAPIKey)
+		if cfg.OpenAIAPIKey == "" {
+			return nil, fmt.Errorf("provider %q requires openAIApiKey in config or OPENAI_API_KEY env var", cfg.Provider)
+		}
+		return llm.NewOpenAIProviderWithKey(cfg.OpenAIBaseURL, cfg.Model, cfg.OpenAIAPIKey), nil
 	case "anthropic":
-		return llm.NewAnthropicProvider(cfg.AnthropicAPIKey, cfg.Model)
-	case "llamacpp":
-		return llm.NewLlamaCppProvider(cfg.LlamaCppBaseURL)
+		if cfg.AnthropicAPIKey == "" {
+			return nil, fmt.Errorf("provider %q requires anthropicApiKey in config or ANTHROPIC_API_KEY env var", cfg.Provider)
+		}
+		return llm.NewAnthropicProvider(cfg.AnthropicAPIKey, cfg.Model), nil
 	case "google":
-		return llm.NewGoogleProvider(cfg.GoogleAPIKey, cfg.Model)
+		if cfg.GoogleAPIKey == "" {
+			return nil, fmt.Errorf("provider %q requires googleApiKey in config or GOOGLE_API_KEY env var", cfg.Provider)
+		}
+		return llm.NewGoogleProvider(cfg.GoogleAPIKey, cfg.Model), nil
+	case "llamacpp":
+		return llm.NewLlamaCppProvider(cfg.LlamaCppBaseURL), nil
 	default:
-		return llm.NewOllamaProvider(cfg.OllamaBaseURL, cfg.Model)
+		return llm.NewOllamaProvider(cfg.OllamaBaseURL, cfg.Model), nil
 	}
 }
 
 // BuildToolRegistry builds a tool registry respecting DisabledTools / EnabledTools config.
+//
+// Precedence rules (highest to lowest):
+//  1. DisabledTools=true  → empty registry, all tools disabled regardless of EnabledTools.
+//  2. EnabledTools=[...]  → only the named tools are registered.
+//  3. Neither set        → all built-in tools are registered.
 func BuildToolRegistry(cfg *Config) *tools.ToolRegistry {
 	if cfg.DisabledTools {
 		return tools.NewToolRegistry()

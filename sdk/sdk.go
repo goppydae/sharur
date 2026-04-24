@@ -2,21 +2,25 @@
 //
 // Example:
 //
-//	agent, err := sdk.NewAgent(sdk.Config{
+//	ag, err := sdk.NewAgent(sdk.Config{
 //	    Model:    "llama3",
 //	    Provider: "ollama",
-//	    Tools:    []sdk.Tool{tools.Read{}, tools.Bash{}},
+//	    Tools:    sdk.DefaultTools(),
 //	})
-//	if err != nil { panic(err) }
+//	if err != nil {
+//	    panic(err)
+//	}
 //
-//	agent.Subscribe(func(e sdk.Event) {
+//	ag.Subscribe(func(e sdk.Event) {
 //	    if e.Type == sdk.EventTextDelta {
 //	        fmt.Print(e.Content)
 //	    }
 //	})
 //
-//	agent.Prompt(context.Background(), "What files are in this directory?")
-//	<-agent.Idle()
+//	if err := ag.Prompt(context.Background(), "What files are in this directory?"); err != nil {
+//	    panic(err)
+//	}
+//	<-ag.Idle()
 package sdk
 
 import (

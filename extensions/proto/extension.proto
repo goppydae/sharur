@@ -7,6 +7,7 @@ option go_package = "github.com/goppydae/gollm/extensions/proto";
 service Extension {
   rpc Name(Empty) returns (NameResponse);
   rpc Tools(Empty) returns (ToolsResponse);
+  rpc ExecuteTool(ExecuteToolRequest) returns (ExecuteToolResponse);
   rpc BeforePrompt(BeforePromptRequest) returns (BeforePromptResponse);
   rpc AfterToolCall(AfterToolCallRequest) returns (AfterToolCallResponse);
   rpc ModifySystemPrompt(ModifySystemPromptRequest) returns (ModifySystemPromptResponse);
@@ -28,10 +29,22 @@ message ToolsResponse {
   repeated ToolDefinition tools = 1;
 }
 
+message ExecuteToolRequest {
+  string name = 1;
+  string arguments_json = 2;
+}
+
+message ExecuteToolResponse {
+  string content = 1;
+  bool is_error = 2;
+}
+
 // Represents the state passed to BeforePrompt
 message AgentState {
   string prompt = 1;
-  // Further fields can be added here as needed (e.g. session context)
+  string model = 2;
+  string provider = 3;
+  string thinking_level = 4;
 }
 
 message BeforePromptRequest {

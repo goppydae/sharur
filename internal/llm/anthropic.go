@@ -13,8 +13,23 @@ import (
 	"github.com/goppydae/gollm/internal/types"
 )
 
-const anthropicAPIVersion = "2023-07-01"
-const anthropicBaseURL = "https://api.anthropic.com"
+const (
+	anthropicAPIVersion = "2023-07-01"
+	anthropicBaseURL    = "https://api.anthropic.com"
+
+	// anthropicDefaultMaxTokens is the default output token limit when none is specified.
+	anthropicDefaultMaxTokens = 8192
+
+	// anthropicThinkingBudgetMedium / High are the extended-thinking token budgets.
+	anthropicThinkingBudgetMedium = 10000
+	anthropicThinkingBudgetHigh   = 20000
+
+	// anthropicThinkingTemperature is required by the API when extended thinking is enabled.
+	anthropicThinkingTemperature = 1.0
+
+	// anthropicClientTimeout is the HTTP client timeout for streaming responses.
+	anthropicClientTimeout = 5 * time.Minute
+)
 
 // AnthropicProvider implements the Provider interface for Anthropic's Messages API.
 type AnthropicProvider struct {
@@ -31,11 +46,11 @@ func NewAnthropicProvider(apiKey, model string) *AnthropicProvider {
 		model = "claude-sonnet-4-6"
 	}
 	return &AnthropicProvider{
-		client:    &http.Client{Timeout: 5 * time.Minute},
+		client:    &http.Client{Timeout: anthropicClientTimeout},
 		apiKey:    apiKey,
 		model:     model,
-		maxTokens: 8192,
-		temp:      1.0,
+		maxTokens: anthropicDefaultMaxTokens,
+		temp:      anthropicThinkingTemperature,
 	}
 }
 
@@ -94,15 +109,15 @@ func (p *AnthropicProvider) stream(ctx context.Context, req *CompletionRequest, 
 	}
 	// Extended thinking
 	if req.Thinking == types.ThinkingHigh || req.Thinking == types.ThinkingMedium {
-		budgetTokens := 10000
+		budgetTokens := anthropicThinkingBudgetMedium
 		if req.Thinking == types.ThinkingHigh {
-			budgetTokens = 20000
+			budgetTokens = anthropicThinkingBudgetHigh
 		}
 		body["thinking"] = map[string]any{
-			"type":         "enabled",
+			"type":          "enabled",
 			"budget_tokens": budgetTokens,
 		}
-		body["temperature"] = 1 // required for extended thinking
+		body["temperature"] = anthropicThinkingTemperature // required for extended thinking
 	}
 
 	data, err := json.Marshal(body)
@@ -261,7 +276,10 @@ func convertMessagesForAnthropic(messages []types.Message) []map[string]any {
 			for _, tc := range m.ToolCalls {
 				var input any
 				if len(tc.Args) > 0 {
-					json.Unmarshal(tc.Args, &input) //nolint:errcheck
+					if err := json.Unmarshal(tc.Args, &input); err != nil {
+						// Malformed args from the LLM — pass the raw string so the model can see the error.
+						input = string(tc.Args)
+					}
 				}
 				content = append(content, map[string]any{
 					"type":  "tool_use",

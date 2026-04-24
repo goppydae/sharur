@@ -7,12 +7,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// subscriberChanSize is the per-subscriber buffer depth. Large enough to absorb
+// bursts from a streaming LLM turn without blocking the agent loop.
+const subscriberChanSize = 1024
+
 // Handler is a function that handles an event.
 type Handler func(any)
 
 // EventBus is a robust typed event bus with async delivery.
+//
+// A single mutex (not RWMutex) guards all state so that Publish, Subscribe,
+// and Close can never race. Publish uses non-blocking channel sends so a slow
+// subscriber never stalls the agent loop — events are dropped rather than
+// blocking the publisher.
 type EventBus struct {
-	mu          sync.RWMutex
+	mu          sync.Mutex
 	subscribers map[string]*subscriber
 	closed      bool
 }
@@ -29,17 +38,23 @@ func NewEventBus() *EventBus {
 	}
 }
 
-// Publish sends an event to all subscribers asynchronously.
+// Publish sends an event to all subscribers. The send is non-blocking: if a
+// subscriber's buffer is full the event is dropped for that subscriber rather
+// than stalling the caller.
 func (b *EventBus) Publish(event any) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	if b.closed {
 		return
 	}
 
 	for _, sub := range b.subscribers {
-		sub.ch <- event
+		select {
+		case sub.ch <- event:
+		default:
+			// subscriber is too slow — drop rather than block the agent loop
+		}
 	}
 }
 
@@ -52,7 +67,7 @@ func (b *EventBus) Subscribe(fn Handler) func() {
 	id := uuid.New().String()
 	sub := &subscriber{
 		id: id,
-		ch: make(chan any, 1024),
+		ch: make(chan any, subscriberChanSize),
 	}
 	b.subscribers[id] = sub
 

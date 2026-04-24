@@ -121,7 +121,12 @@ func editLiteral(content, oldText, newText string, offset int) (string, error) {
 		if start > len(lines) {
 			start = len(lines)
 		}
-		content = strings.Join(lines[start:], "\n")
+		prefix := strings.Join(lines[:start], "\n")
+		suffix := strings.Join(lines[start:], "\n")
+		if !strings.Contains(suffix, oldText) {
+			return "", fmt.Errorf("text not found: %q", oldText)
+		}
+		return prefix + "\n" + strings.Replace(suffix, oldText, newText, 1), nil
 	}
 
 	if !strings.Contains(content, oldText) {
@@ -132,18 +137,23 @@ func editLiteral(content, oldText, newText string, offset int) (string, error) {
 }
 
 func editRegex(content, pattern, replacement string, offset int) (string, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid regex: %w", err)
+	}
+
 	if offset > 0 {
 		lines := strings.Split(content, "\n")
 		start := offset - 1
 		if start > len(lines) {
 			start = len(lines)
 		}
-		content = strings.Join(lines[start:], "\n")
-	}
-
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return "", fmt.Errorf("invalid regex: %w", err)
+		prefix := strings.Join(lines[:start], "\n")
+		suffix := strings.Join(lines[start:], "\n")
+		if !re.MatchString(suffix) {
+			return "", fmt.Errorf("regex pattern not found: %q", pattern)
+		}
+		return prefix + "\n" + re.ReplaceAllString(suffix, replacement), nil
 	}
 
 	if !re.MatchString(content) {

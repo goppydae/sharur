@@ -208,7 +208,10 @@ func (x *ToolsResponse) GetTools() []*ToolDefinition {
 // Represents the state passed to BeforePrompt
 type AgentState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Prompt        string                 `protobuf:"bytes,1,opt,name=prompt,proto3" json:"prompt,omitempty"` // Further fields can be added here as needed (e.g. session context)
+	Prompt        string                 `protobuf:"bytes,1,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	Model         string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	Provider      string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	ThinkingLevel string                 `protobuf:"bytes,4,opt,name=thinking_level,json=thinkingLevel,proto3" json:"thinking_level,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -246,6 +249,27 @@ func (*AgentState) Descriptor() ([]byte, []int) {
 func (x *AgentState) GetPrompt() string {
 	if x != nil {
 		return x.Prompt
+	}
+	return ""
+}
+
+func (x *AgentState) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *AgentState) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *AgentState) GetThinkingLevel() string {
+	if x != nil {
+		return x.ThinkingLevel
 	}
 	return ""
 }

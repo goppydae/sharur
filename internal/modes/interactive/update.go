@@ -465,7 +465,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.config.Provider = m.provider
 		m.config.Model = m.modelName
-		newProv := config.BuildProvider(m.config)
+		newProv, provErr := config.BuildProvider(m.config)
+		if provErr != nil {
+			m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: provErr.Error()}}})
+			return m.refreshViewport(), listenForEvent(m.eventCh)
+		}
 		m.ag.SetProvider(newProv)
 		notice := fmt.Sprintf("Switched model → %s", next)
 		m.history = append(m.history, historyEntry{role: "info", items: []contentItem{{kind: contentItemText, text: notice}}})

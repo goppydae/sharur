@@ -53,28 +53,46 @@ func TestEventBus_Unsubscribe(t *testing.T) {
 	bus := NewEventBus()
 	defer bus.Close()
 
-	count := 0
+	var count int
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	handler := func(ev any) {
 		mu.Lock()
 		count++
 		mu.Unlock()
+		wg.Done()
 	}
 
 	unsub := bus.Subscribe(handler)
 	bus.Publish("event 1")
-	
-	// Give some time for async delivery
-	time.Sleep(100 * time.Millisecond)
-	
+
+	// Wait for delivery with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first event delivery")
+	}
+
 	unsub()
 	bus.Publish("event 2")
-	
-	time.Sleep(100 * time.Millisecond)
+
+	// No sleep needed: unsub() is synchronous with the subscriber map, 
+	// and Publish() is also synchronous regarding its iteration over that map.
+	// Once unsub() returns, Publish() called afterwards will not see the subscriber.
 
 	mu.Lock()
-	if count != 1 {
-		t.Errorf("expected 1 event, got %d", count)
-	}
+	got := count
 	mu.Unlock()
+	if got != 1 {
+		t.Errorf("expected 1 event after unsubscribe, got %d", got)
+	}
 }
+
