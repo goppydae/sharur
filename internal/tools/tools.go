@@ -80,3 +80,11 @@ func (r *ToolRegistry) MustGet(name string) Tool {
 	}
 	return t
 }
+
+// NormalizePath strips a leading '@' from a path if present.
+func NormalizePath(path string) string {
+	if len(path) > 0 && path[0] == '@' {
+		return path[1:]
+	}
+	return path
+}

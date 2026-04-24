@@ -63,6 +63,8 @@ func (t Bash) Execute(ctx context.Context, args json.RawMessage, update ToolUpda
 	cwd := params.Cwd
 	if cwd == "" {
 		cwd = t.Cwd
+	} else {
+		cwd = NormalizePath(cwd)
 	}
 	if cwd == "" {
 		var err error

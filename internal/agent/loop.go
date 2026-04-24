@@ -76,8 +76,6 @@ func (a *Agent) runTurn(ctx context.Context) {
 		a.state.Messages = append(a.state.Messages, assistantMsg)
 		a.mu.Unlock()
 
-		a.events.Publish(Event{Type: EventMessageEnd})
-
 		if len(llmCalls) == 0 {
 			// Check queues again. If anything was added during stream, start new turn.
 			if a.drainQueues() {
@@ -157,6 +155,7 @@ func (a *Agent) consumeStream(ctx context.Context, stream <-chan *llm.Event) (st
 	var sb strings.Builder
 	var thinkingSb strings.Builder
 	var toolCalls []*llm.ToolCall
+	sentEnd := false
 
 	for {
 		select {
@@ -170,6 +169,9 @@ func (a *Agent) consumeStream(ctx context.Context, stream <-chan *llm.Event) (st
 			return "", "", nil, false
 		case ev, ok := <-stream:
 			if !ok {
+				if !sentEnd {
+					a.events.Publish(Event{Type: EventMessageEnd})
+				}
 				return sb.String(), thinkingSb.String(), toolCalls, true
 			}
 			switch ev.Type {
@@ -193,9 +195,12 @@ func (a *Agent) consumeStream(ctx context.Context, stream <-chan *llm.Event) (st
 					})
 				}
 			case llm.EventMessageEnd:
+				sentEnd = true
 				if ev.Usage != nil {
 					a.events.Publish(Event{Type: EventMessageEnd, Usage: ev.Usage})
 					a.events.Publish(Event{Type: EventTokens, Value: int64(ev.Usage.TotalTokens)})
+				} else {
+					a.events.Publish(Event{Type: EventMessageEnd})
 				}
 			case llm.EventError:
 				_ = a.lifeState.Transition(StateError)

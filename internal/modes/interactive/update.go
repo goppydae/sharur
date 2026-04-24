@@ -271,7 +271,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.vp.GotoBottom()
 		m.vp.SetHeight(m.vpHeight())
 
-		expanded := expandAttachments(raw)
 		entry := historyEntry{role: "user", items: []contentItem{{kind: contentItemText, text: raw}}}
 		if m.isRunning && len(m.history) > 0 && m.history[len(m.history)-1].role == "assistant" {
 			idx := len(m.history) - 1
@@ -281,10 +280,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.history = append(m.history, entry)
 		}
 		if m.isRunning {
-			m.ag.FollowUp(expanded)
+			m.ag.FollowUp(raw)
 		} else {
 			m.newContext()
-			err := m.ag.Prompt(m.ctx, expanded)
+			err := m.ag.Prompt(m.ctx, raw)
 			if err != nil {
 				m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: err.Error()}}})
 			}
@@ -422,7 +421,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.refreshViewport(), listenForEvent(m.eventCh)
 		}
 
-		expanded := expandAttachments(raw)
 		entry := historyEntry{role: "user", items: []contentItem{{kind: contentItemText, text: raw}}}
 		if m.isRunning && len(m.history) > 0 && m.history[len(m.history)-1].role == "assistant" {
 			idx := len(m.history) - 1
@@ -432,10 +430,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.history = append(m.history, entry)
 		}
 		if m.isRunning {
-			m.ag.Steer(expanded)
+			m.ag.Steer(raw)
 		} else {
 			m.newContext()
-			err := m.ag.Prompt(m.ctx, expanded)
+			err := m.ag.Prompt(m.ctx, raw)
 			if err != nil {
 				m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: err.Error()}}})
 				m.isRunning = false

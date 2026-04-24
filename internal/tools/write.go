@@ -52,32 +52,32 @@ func (Write) Execute(ctx context.Context, args json.RawMessage, update ToolUpdat
 	}
 
 	// Resolve path
-	absPath, err := filepath.Abs(params.Path)
+	path, err := filepath.Abs(NormalizePath(params.Path))
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
 	// Create parent directories
-	dir := filepath.Dir(absPath)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create directories: %w", err)
 	}
 
 	// Write file
-	if err := os.WriteFile(absPath, []byte(params.Content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(params.Content), 0644); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 
 	// Get file info
-	info, err := os.Stat(absPath)
+	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat file: %w", err)
 	}
 
 	result := &ToolResult{
-		Content: fmt.Sprintf("Written %d bytes to %s", len(params.Content), absPath),
+		Content: fmt.Sprintf("Written %d bytes to %s", len(params.Content), path),
 		Metadata: map[string]any{
-			"path":   absPath,
+			"path":   path,
 			"size":   info.Size(),
 			"mode":   info.Mode().String(),
 		},

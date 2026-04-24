@@ -58,7 +58,7 @@ func (Find) Execute(ctx context.Context, args json.RawMessage, update ToolUpdate
 		root = "."
 	}
 
-	absRoot, err := filepath.Abs(root)
+	absRoot, err := filepath.Abs(NormalizePath(root))
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}

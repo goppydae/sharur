@@ -202,3 +202,23 @@ func TestFind(t *testing.T) {
 		t.Errorf("expected no .txt files, got: %s", result.Content)
 	}
 }
+
+func TestNormalizePath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"README.md", "README.md"},
+		{"@README.md", "README.md"},
+		{"/path/to/file", "/path/to/file"},
+		{"@/path/to/file", "/path/to/file"},
+		{"", ""},
+		{"@", ""},
+	}
+
+	for _, tt := range tests {
+		if got := NormalizePath(tt.input); got != tt.expected {
+			t.Errorf("NormalizePath(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}

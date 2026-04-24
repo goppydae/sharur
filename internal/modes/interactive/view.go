@@ -11,6 +11,7 @@ import (
 )
 
 var skillRegex = regexp.MustCompile(`(?s)<skill name="([^"]+)" location="([^"]+)">\n(.*?)\n<\/skill>(.*)`)
+var fileRegex = regexp.MustCompile(`(?s)<file path="([^"]+)">\n(.*?)\n<\/file>(.*)`)
 
 // View implements tea.Model.View.
 func (m *model) View() tea.View {
@@ -168,6 +169,29 @@ func renderToolCall(tc toolCallEntry, output string, chatW int, s Style, expande
 	return renderBox(rawLines, chatW, chatW, boxStyle, false)
 }
 
+func renderFileAttachment(path, content, extra string, chatW int, s Style, expanded bool) string {
+	bgColor := s.ToolRunningBgColor()
+	boxStyle := lipgloss.NewStyle().Background(bgColor).PaddingLeft(2).PaddingRight(2)
+
+	var rawLines []string
+	header := "📎 file: " + path
+	rawLines = append(rawLines, s.ToolCall().Bold(true).Foreground(s.AccentColor()).Background(bgColor).Render(header))
+
+	if expanded {
+		for _, l := range strings.Split(content, "\n") {
+			rawLines = append(rawLines, s.Muted().Background(bgColor).Render(l))
+		}
+	} else {
+		rawLines = append(rawLines, s.Muted().Background(bgColor).Render(" (Ctrl+O to expand)"))
+	}
+
+	res := renderBox(rawLines, chatW, chatW, boxStyle, false)
+	if extra != "" {
+		res += "\n\n" + extra
+	}
+	return res
+}
+
 func renderSkill(name, args, location, content string, chatW int, s Style, expanded bool) string {
 	bgColor := s.ToolRunningBgColor()
 	boxStyle := lipgloss.NewStyle().Background(bgColor).PaddingLeft(2).PaddingRight(2)
@@ -207,15 +231,23 @@ func renderEntry(e historyEntry, s Style, chatW int, toolCallsExpanded bool) str
 			switch e.role {
 			case "user":
 				// Check for skill block
-				matches := skillRegex.FindStringSubmatch(item.text)
-				if len(matches) >= 4 {
+				if matches := skillRegex.FindStringSubmatch(item.text); len(matches) >= 4 {
 					name := matches[1]
 					location := matches[2]
 					body := matches[3]
 					extra := strings.TrimSpace(matches[4])
 
 					parts = append(parts, renderSkill(name, extra, location, body, chatW, s, toolCallsExpanded))
-					continue // Already added to parts
+					continue
+				}
+				// Check for file attachment
+				if matches := fileRegex.FindStringSubmatch(item.text); len(matches) >= 4 {
+					path := matches[1]
+					body := matches[2]
+					extra := strings.TrimSpace(matches[3])
+
+					parts = append(parts, renderFileAttachment(path, body, extra, chatW, s, toolCallsExpanded))
+					continue
 				}
 				rendered = wrapAndRightAlign(item.text, chatW, msgW, s.UserBox())
 			case "assistant":

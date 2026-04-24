@@ -67,8 +67,8 @@ func (Edit) Execute(ctx context.Context, args json.RawMessage, update ToolUpdate
 		return nil, fmt.Errorf("oldText is required")
 	}
 
-	// Read file
-	absPath, err := filepath.Abs(params.Path)
+	// Resolve path
+	absPath, err := filepath.Abs(NormalizePath(params.Path))
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}

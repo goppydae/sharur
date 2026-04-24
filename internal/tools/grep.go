@@ -76,7 +76,7 @@ func (Grep) Execute(ctx context.Context, args json.RawMessage, update ToolUpdate
 		path = "."
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := filepath.Abs(NormalizePath(path))
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}

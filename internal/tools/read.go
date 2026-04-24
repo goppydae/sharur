@@ -53,14 +53,18 @@ func (Read) Execute(ctx context.Context, args json.RawMessage, update ToolUpdate
 		return nil, fmt.Errorf("path is required")
 	}
 
-	// Resolve path
-	path, err := filepath.Abs(params.Path)
+	path := params.Path
+	if path == "" {
+		path = "."
+	}
+
+	absPath, err := filepath.Abs(NormalizePath(path))
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
 	// Read file
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
 	}
@@ -89,7 +93,7 @@ func (Read) Execute(ctx context.Context, args json.RawMessage, update ToolUpdate
 	return &ToolResult{
 		Content: output,
 		Metadata: map[string]any{
-			"path":   path,
+			"path":   absPath,
 			"lines":  len(lines),
 			"size":   len(data),
 		},

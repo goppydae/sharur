@@ -33,22 +33,44 @@ func (m *model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case agent.EventToolCall:
 		if ev.ToolCall != nil {
-			entry := m.ensureAssistantEntry()
-			arg := extractFirstArgument(string(ev.ToolCall.Args))
-			entry.items = append(entry.items, contentItem{
-				kind: contentItemToolCall,
-				tc: toolCallEntry{
-					id:     ev.ToolCall.ID,
-					name:   ev.ToolCall.Name,
-					arg:    arg,
-					status: toolCallRunning,
-				},
-			})
+			// Deduplicate: don't add the same tool call ID twice in the current conversation turn.
+			// ONLY deduplicate if the ID is not empty. Empty IDs (common with some models)
+			// should always be treated as unique tool calls.
+			duplicate := false
+			if ev.ToolCall.ID != "" {
+				for hIdx := len(m.history) - 1; hIdx >= 0; hIdx-- {
+					if m.history[hIdx].role != "assistant" {
+						break
+					}
+					for _, item := range m.history[hIdx].items {
+						if item.kind == contentItemToolCall && item.tc.id == ev.ToolCall.ID {
+							duplicate = true
+							break
+						}
+					}
+					if duplicate {
+						break
+					}
+				}
+			}
+
+			if !duplicate {
+				entry := m.ensureAssistantEntry()
+				arg := extractFirstArgument(string(ev.ToolCall.Args))
+				entry.items = append(entry.items, contentItem{
+					kind: contentItemToolCall,
+					tc: toolCallEntry{
+						id:     ev.ToolCall.ID,
+						name:   ev.ToolCall.Name,
+						arg:    arg,
+						status: toolCallRunning,
+					},
+				})
+			}
 		}
 
 	case agent.EventToolDelta:
 		if ev.ToolCall != nil && ev.Content != "" {
-			// Find the corresponding tool call and append to its streamingOutput
 			for hIdx := len(m.history) - 1; hIdx >= 0; hIdx-- {
 				if m.history[hIdx].role != "assistant" {
 					continue
@@ -56,7 +78,10 @@ func (m *model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 				entry := &m.history[hIdx]
 				for i := range entry.items {
 					if entry.items[i].kind == contentItemToolCall && entry.items[i].tc.id == ev.ToolCall.ID {
-						entry.items[i].tc.streamingOutput += ev.Content
+						// Don't update if already finished
+						if entry.items[i].tc.status == toolCallRunning {
+							entry.items[i].tc.streamingOutput += ev.Content
+						}
 						break
 					}
 				}
@@ -89,10 +114,14 @@ func (m *model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 				entry = &m.history[hIdx]
 				for i := range entry.items {
 					if entry.items[i].kind == contentItemToolCall && entry.items[i].tc.id == ev.ToolOutput.ToolCallID {
-						if ev.ToolOutput.IsError {
+						// If ID is empty, only match if it's still running (to handle multiple empty-ID calls in order)
+						if ev.ToolOutput.ToolCallID == "" && entry.items[i].tc.status != toolCallRunning {
+							continue
+						}
+						
+						entry.items[i].tc.status = toolCallSuccess
+						if ev.ToolOutput.IsError || strings.HasPrefix(ev.ToolOutput.Content, "Error:") || strings.HasPrefix(ev.ToolOutput.Content, "tool error:") {
 							entry.items[i].tc.status = toolCallFailure
-						} else {
-							entry.items[i].tc.status = toolCallSuccess
 						}
 						// Insert output right after the tool call.
 						outItem := contentItem{
@@ -174,7 +203,7 @@ func (m *model) syncHistoryFromAgent() {
 				for i := range entry.items {
 					if entry.items[i].kind == contentItemToolCall && entry.items[i].tc.id == msg.ToolCallID {
 						entry.items[i].tc.status = toolCallSuccess
-						if strings.HasPrefix(msg.Content, "Error:") {
+						if strings.HasPrefix(msg.Content, "Error:") || strings.HasPrefix(msg.Content, "tool error:") {
 							entry.items[i].tc.status = toolCallFailure
 						}
 						// Add output item
@@ -258,6 +287,14 @@ func (m *model) syncPromptHistory() {
 // ensureAssistantEntry returns the latest historyEntry if it is of role assistant,
 // or creates and appends a new one if necessary.
 func (m *model) ensureAssistantEntry() *historyEntry {
+	if len(m.history) > 0 && m.history[len(m.history)-1].role == "assistant" {
+		last := &m.history[len(m.history)-1]
+		if len(last.items) == 0 || !m.newAssistantEntry {
+			m.newAssistantEntry = false
+			return last
+		}
+	}
+
 	if m.newAssistantEntry || len(m.history) == 0 || m.history[len(m.history)-1].role != "assistant" {
 		m.history = append(m.history, historyEntry{role: "assistant"})
 		m.newAssistantEntry = false
