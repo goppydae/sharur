@@ -4,6 +4,8 @@
 
 `gollm` is a powerful, local-first AI agentic harness designed for developers who want a flexible and reliable assistant that runs on their own hardware. It prioritizes local LLMs (via Ollama and llama.cpp) but adapts seamlessly to cloud providers like OpenAI, Anthropic, and Google Gemini.
 
+> A Golem is designed to be a tireless servant to its creator. Brought to life through ritual, created entirely from inanimate matter. It performs physical labor or provides protection.
+
 ---
 
 ## Core Philosophy
@@ -19,7 +21,7 @@
 
 ### Prerequisites
 
-- **Go** 1.22+
+- **Go** 1.25+
 - **Nix** (optional, recommended) — with flake support enabled
 
 ### Installation
