@@ -8,12 +8,90 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Build the gollm binary.
 func Build() error {
-	return run("go", "build", "-o", binaryPath(), "./cmd/glm")
+	v := getVersion()
+	ldflags := fmt.Sprintf("-X main.version=%s", v)
+	return run("go", "build", "-ldflags", ldflags, "-o", binaryPath(), "./cmd/glm")
+}
+
+// Release builds cross-platform binaries and archives them.
+func Release() error {
+	v := getVersion()
+	if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	fmt.Printf("🚀 Releasing %s...\n", v)
+
+	platforms := []struct {
+		os   string
+		arch string
+	}{
+		{"linux", "amd64"},
+		{"linux", "arm64"},
+		{"darwin", "amd64"},
+		{"darwin", "arm64"},
+		{"windows", "amd64"},
+	}
+
+	os.RemoveAll("dist")
+	os.MkdirAll("dist", 0755)
+
+	ldflags := fmt.Sprintf("-X main.version=%s", v)
+
+	for _, p := range platforms {
+		ext := ""
+		if p.os == "windows" {
+			ext = ".exe"
+		}
+		name := fmt.Sprintf("glm-%s-%s-%s%s", v, p.os, p.arch, ext)
+		target := filepath.Join("dist", name)
+
+		fmt.Printf("Building %s/%s...\n", p.os, p.arch)
+		cmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", target, "./cmd/glm")
+		cmd.Env = append(os.Environ(), "GOOS="+p.os, "GOARCH="+p.arch, "CGO_ENABLED=0")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to build %s/%s: %w", p.os, p.arch, err)
+		}
+
+		// Create archive
+		if p.os == "windows" {
+			// .zip
+			zipName := fmt.Sprintf("glm-%s-%s-%s.zip", v, p.os, p.arch)
+			if err := run("zip", "-j", filepath.Join("dist", zipName), target); err != nil {
+				fmt.Printf("Warning: failed to zip %s (is zip installed?): %v\n", zipName, err)
+			}
+		} else {
+			// .tar.gz
+			tarName := fmt.Sprintf("glm-%s-%s-%s.tar.gz", v, p.os, p.arch)
+			if err := run("tar", "-czf", filepath.Join("dist", tarName), "-C", "dist", name); err != nil {
+				fmt.Printf("Warning: failed to tar %s: %v\n", tarName, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func getVersion() string {
+	if v := os.Getenv("VERSION"); v != "" {
+		return v
+	}
+	if v := os.Getenv("GITHUB_REF_NAME"); v != "" {
+		return v
+	}
+	data, err := os.ReadFile("VERSION")
+	if err != nil {
+		return "dev"
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // Run tests with coverage.

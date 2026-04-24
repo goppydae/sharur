@@ -1,4 +1,5 @@
 package main
+ 
 
 import (
 	"fmt"
@@ -21,6 +22,9 @@ import (
 	"github.com/goppydae/gollm/internal/skills"
 	"github.com/goppydae/gollm/internal/themes"
 )
+ 
+var version = "dev"
+ 
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
@@ -94,7 +98,7 @@ func rootCmd() *cobra.Command {
 
 			// --version
 			if showVersion {
-				fmt.Println("gollm version dev")
+				fmt.Printf("gollm version %s\n", version)
 				return nil
 			}
 
