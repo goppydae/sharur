@@ -32,7 +32,3 @@ func writeJSON(w *os.File, data any) {
 	w.Write(b) //nolint:errcheck
 }
 
-func mustMarshal(v any) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}

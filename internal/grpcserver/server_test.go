@@ -98,7 +98,7 @@ func newTestClient(t *testing.T, prov llm.Provider) pb.AgentServiceClient {
 	if err != nil {
 		t.Fatalf("dial bufconn: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { conn.Close() }) //nolint:errcheck
 	return pb.NewAgentServiceClient(conn)
 }
 
@@ -279,7 +279,7 @@ func newTestClientWithManager(t *testing.T, prov llm.Provider, mgr *session.Mana
 	if err != nil {
 		t.Fatalf("dial bufconn: %v", err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { conn.Close() }) //nolint:errcheck
 	return pb.NewAgentServiceClient(conn)
 }
 

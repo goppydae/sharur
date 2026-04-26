@@ -13,7 +13,7 @@
 - **Local-First** — Built from the ground up to favor local inference for privacy, speed, and cost-efficiency.
 - **Aggressively Extensible** — Every tool, provider, and behavior is a plugin interface. Supports gRPC extensions, markdown skills, and reusable prompt templates.
 - **Session Persistence** — Intelligent JSONL-backed session management with project-aware storage, branching, forking, and tree visualization.
-- **Flexible Modes** — TUI mode, one-shot JSON mode, headless RPC server, or a multi-session gRPC service.
+- **Flexible Modes** — TUI mode, one-shot JSON mode, or a multi-session gRPC service.
 - **Security & Safety** — Dry-run safety for destructive tools, automatic prompt injection mitigation, and a gRPC extension system for enforcing arbitrary policies.
 
 ---
@@ -49,9 +49,6 @@ glm --mode json "What is the best way to structure a Go project?"
 
 # Resume the most recent session on startup
 glm --continue
-
-# Headless JSONL RPC server
-glm --mode rpc
 ```
 
 ---
@@ -122,11 +119,7 @@ cat main.go | glm --mode json "Refactor this to use interfaces"
 glm --mode json "Summarize the last 10 git commits" --model anthropic/claude-opus-4-5
 ```
 
-### 3. RPC Mode (`--mode rpc`)
-
-Headless JSONL server over stdin/stdout. Ideal for editor integrations and external tooling.
-
-### 4. gRPC Mode (`--mode grpc`)
+### 3. gRPC Mode (`--mode grpc`)
 
 A persistent multi-session gRPC service. Each client-supplied `session_id` gets its own isolated agent; sessions are saved to disk after each turn and reloaded automatically on reconnect.
 
@@ -309,7 +302,7 @@ glm --extension ./gollm-sandbox "Refactor main.go"
 --theme              UI theme (dark, light, cyberpunk, synthwave, …)
 --session            Resume a specific session by ID or path
 --continue / -c      Resume the most recent session
---mode               Mode: tui (default), json, rpc, grpc
+--mode               Mode: tui (default), json, grpc
 --grpc-addr          gRPC listen address (default :50051; --mode grpc only)
 --no-session         Disable session persistence
 --models             Comma-separated model list for Ctrl+P cycling

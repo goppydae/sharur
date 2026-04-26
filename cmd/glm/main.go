@@ -88,7 +88,6 @@ func rootCmd() *cobra.Command {
 		Long: `gollm is a local-first AI agent with several modes:
   --mode tui     Interactive bubbletea TUI (default)
   --mode json    One-shot mode with JSONL output
-  --mode rpc     Interactive RPC mode over stdin/stdout
   --mode grpc    gRPC server (multi-session, default addr :50051)`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -195,8 +194,6 @@ func rootCmd() *cobra.Command {
 					mode = "interactive"
 				case "json", "print", "text":
 					mode = "json"
-				case "rpc":
-					mode = "rpc"
 				case "grpc":
 					mode = "grpc"
 				default:
@@ -318,8 +315,6 @@ func rootCmd() *cobra.Command {
 						ThinkingLevel:  cfg.ThinkingLevel,
 						JSON:           mode == "json",
 					})
-			case "rpc":
-				handler = modes.NewRPCHandler(prov, registry, mgr, exts)
 			case "grpc":
 				handler = modes.NewGRPCHandler(prov, registry, mgr, exts, cfg.GRPCAddr)
 			case "interactive":
@@ -341,7 +336,7 @@ func rootCmd() *cobra.Command {
 	}
 
 	// Mode flags
-	cmd.Flags().StringVar(&outputMode, "mode", "", "Mode: tui (default), json, rpc")
+	cmd.Flags().StringVar(&outputMode, "mode", "", "Mode: tui (default), json, grpc")
 
 	// Model / provider
 	cmd.Flags().StringVarP(&model, "model", "m", "", "Model (e.g. llama3, gpt-4o, anthropic/claude-sonnet-4-5)")

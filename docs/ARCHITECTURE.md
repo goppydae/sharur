@@ -8,7 +8,7 @@ This document describes the high-level architecture of `gollm`: how its componen
 
 ```
 gollm/
-├── cmd/glm/           # Entry point — CLI flags, config loading, mode dispatch (--mode tui|json|rpc)
+├── cmd/glm/           # Entry point — CLI flags, config loading, mode dispatch (--mode tui|json|grpc)
 ├── sdk/                # Public Go SDK (thin wrapper over internal/agent)
 ├── internal/
 │   ├── agent/          # Core agentic loop, event bus, state machine
@@ -17,8 +17,7 @@ gollm/
 │   ├── session/        # JSONL-backed session persistence, branching, tree
 │   ├── modes/
 │   │   ├── interactive/ # Bubble Tea TUI (mode: tui)
-│   │   ├── print.go    # One-shot CLI JSONL mode (mode: json)
-│   │   └── rpc.go      # Headless JSONL RPC server (mode: rpc)
+│   │   └── print.go    # One-shot CLI JSONL mode (mode: json)
 │   ├── config/         # Config loading (global + project layering)
 │   ├── themes/         # TUI colour themes
 │   ├── types/          # Shared value types (Message, Session, ThinkingLevel)
@@ -35,7 +34,7 @@ gollm/
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  CLI flags → Config → Mode dispatch (tui/json/rpc)         │
+│  CLI flags → Config → Mode dispatch (tui/json/grpc)        │
 └────────────────────────┬────────────────────────────────────┘
                          │
           ┌──────────────▼──────────────┐
@@ -56,7 +55,7 @@ gollm/
           │  └────────────┬────────────┘│
           │               │ publishes   │
           │  ┌────────────▼────────────┐│
-          │  │       EventBus          ││  →  subscribers (TUI, RPC, session saver)
+          │  │       EventBus          ││  →  subscribers (TUI, gRPC, session saver)
           │  └─────────────────────────┘│
           └─────────────────────────────┘
                          │
@@ -75,7 +74,7 @@ gollm/
 
 ## Agent Lifecycle & Events
 
-The agent is driven by an **event-bus** (`internal/events`). Every meaningful state transition emits an `agent.Event` to all subscribers. The TUI, RPC mode, and session saver each subscribe independently.
+The agent is driven by an **event-bus** (`internal/events`). Every meaningful state transition emits an `agent.Event` to all subscribers. The TUI and session saver each subscribe independently.
 
 ### Event Flow
 
@@ -311,7 +310,7 @@ The `Magefile.go` defines several targets:
 ```
 User Input
     ↓
-[TUI (tui) / JSON (json) / RPC (rpc)]
+[TUI (tui) / JSON (json) / gRPC (grpc)]
     ↓
 agent.Prompt(ctx, text)
     ↓
@@ -324,5 +323,5 @@ EventAgentEnd
     ↓
 session.Manager.Save()         ← TUI subscriber saves on AgentEnd
     ↓
-[Render to TUI / JSONL / JSONL RPC]
+[Render to TUI / JSONL / gRPC stream]
 ```
