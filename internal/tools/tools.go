@@ -73,6 +73,8 @@ func (r *ToolRegistry) Has(name string) bool {
 }
 
 // MustGet retrieves a tool by name, panicking if not found.
+// Only call this when the tool's existence has already been guaranteed
+// (e.g. during application init). Use Get for runtime lookups.
 func (r *ToolRegistry) MustGet(name string) Tool {
 	t, ok := r.Get(name)
 	if !ok {

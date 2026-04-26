@@ -73,13 +73,17 @@ type Event struct {
 type EventType string
 
 const (
-	EventMessageStart    EventType = "message_start"
-	EventTextDelta       EventType = "text_delta"
-	EventToolCall        EventType = "tool_call"
-	EventThinkingDelta   EventType = "thinking_delta"
-	EventMessageEnd      EventType = "message_end"
-	EventError           EventType = "error"
+	EventMessageStart  EventType = "message_start"
+	EventTextDelta     EventType = "text_delta"
+	EventToolCall      EventType = "tool_call"
+	EventThinkingDelta EventType = "thinking_delta"
+	EventMessageEnd    EventType = "message_end"
+	EventError         EventType = "error"
 )
+
+// streamChannelBuf is the buffer size for provider event channels.
+// Large enough to absorb a burst of tokens without blocking the HTTP goroutine.
+const streamChannelBuf = 32
 
 // ToolCall represents a function call from the LLM.
 type ToolCall struct {

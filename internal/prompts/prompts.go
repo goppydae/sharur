@@ -65,13 +65,26 @@ func Load(path string) (*Prompt, error) {
 
 // Expand substitutes positional arguments ($1, $2, …) into the template.
 // It wraps arguments in <untrusted_input> tags to mitigate prompt injection.
+// Missing arguments are substituted with an empty tagged block so that no
+// literal "$N" placeholder ever reaches the model.
 func Expand(p *Prompt, args ...string) string {
 	result := p.Template
-	for i, arg := range args {
+
+	// Count how many $N placeholders exist in the template so we substitute all of them.
+	maxN := 0
+	for i := 1; strings.Contains(result, fmt.Sprintf("$%d", i)); i++ {
+		maxN = i
+	}
+
+	for i := 1; i <= maxN; i++ {
+		var raw string
+		if i <= len(args) {
+			raw = args[i-1]
+		}
 		// Basic sanitization: prevent breakout from the tag
-		safeArg := strings.ReplaceAll(arg, "</untrusted_input>", "[REDACTED]")
-		tagged := fmt.Sprintf("<untrusted_input>\n%s\n</untrusted_input>", safeArg)
-		result = strings.ReplaceAll(result, fmt.Sprintf("$%d", i+1), tagged)
+		raw = strings.ReplaceAll(raw, "</untrusted_input>", "[REDACTED]")
+		tagged := fmt.Sprintf("<untrusted_input>\n%s\n</untrusted_input>", raw)
+		result = strings.ReplaceAll(result, fmt.Sprintf("$%d", i), tagged)
 	}
 	return strings.TrimSpace(result)
 }

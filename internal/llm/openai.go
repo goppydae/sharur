@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -57,11 +56,14 @@ func (p *OpenAIProvider) Info() ProviderInfo {
 }
 
 func (p *OpenAIProvider) Stream(ctx context.Context, req *CompletionRequest) (<-chan *Event, error) {
-	ch := make(chan *Event, 32)
+	ch := make(chan *Event, streamChannelBuf)
 	go func() {
 		defer close(ch)
 		if err := p.stream(ctx, req, ch); err != nil {
-			ch <- &Event{Type: EventError, Error: err}
+			select {
+			case ch <- &Event{Type: EventError, Error: err}:
+			case <-ctx.Done():
+			}
 		}
 	}()
 	return ch, nil
@@ -299,8 +301,9 @@ func (p *OpenAIProvider) ListModels() ([]string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		var body bytes.Buffer
+		_, _ = body.ReadFrom(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body.String())
 	}
 
 	var data struct {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -67,7 +66,14 @@ func (p *OllamaProvider) SetTemperature(t float64) {
 
 // Stream sends messages and returns an event stream.
 func (p *OllamaProvider) Stream(ctx context.Context, req *CompletionRequest) (<-chan *Event, error) {
-	events := make(chan *Event, 32)
+	events := make(chan *Event, streamChannelBuf)
+
+	sendErr := func(err error) {
+		select {
+		case events <- &Event{Type: EventError, Error: err}:
+		case <-ctx.Done():
+		}
+	}
 
 	go func() {
 		defer close(events)
@@ -112,28 +118,29 @@ func (p *OllamaProvider) Stream(ctx context.Context, req *CompletionRequest) (<-
 
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
-			events <- &Event{Type: EventError, Error: fmt.Errorf("marshal request: %w", err)}
+			sendErr(fmt.Errorf("marshal request: %w", err))
 			return
 		}
 
 		url := p.baseURL + "/api/chat"
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
 		if err != nil {
-			events <- &Event{Type: EventError, Error: fmt.Errorf("create request: %w", err)}
+			sendErr(fmt.Errorf("create request: %w", err))
 			return
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 
 		resp, err := p.client.Do(httpReq)
 		if err != nil {
-			events <- &Event{Type: EventError, Error: fmt.Errorf("request: %w", err)}
+			sendErr(fmt.Errorf("request: %w", err))
 			return
 		}
 		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			events <- &Event{Type: EventError, Error: fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))}
+			var body bytes.Buffer
+			_, _ = body.ReadFrom(resp.Body)
+			sendErr(fmt.Errorf("HTTP %d: %s", resp.StatusCode, body.String()))
 			return
 		}
 
@@ -144,7 +151,7 @@ func (p *OllamaProvider) Stream(ctx context.Context, req *CompletionRequest) (<-
 		for decoder.More() {
 			var chunk map[string]any
 			if err := decoder.Decode(&chunk); err != nil {
-				events <- &Event{Type: EventError, Error: fmt.Errorf("decode chunk: %w", err)}
+				sendErr(fmt.Errorf("decode chunk: %w", err))
 				return
 			}
 

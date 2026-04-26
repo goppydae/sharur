@@ -85,7 +85,7 @@ func (Read) Execute(ctx context.Context, args json.RawMessage, update ToolUpdate
 		lines = lines[:params.Limit]
 	}
 
-	output := stringsJoined(lines, "\n")
+	output := strings.Join(lines, "\n")
 	if update != nil {
 		update(&ToolResult{Content: output})
 	}
@@ -118,8 +118,5 @@ func splitLines(s string) []string {
 	return lines
 }
 
-func stringsJoined(s []string, sep string) string {
-	return strings.Join(s, sep)
-}
 
 func (Read) IsReadOnly() bool { return true }

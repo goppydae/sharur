@@ -495,12 +495,12 @@ h1{color:#6366f1}span.role{font-size:.8em;opacity:.6;text-transform:uppercase;le
 <body>
 <h1>%s</h1>
 <p style="opacity:.5">ID: %s &mdash; %s</p>
-`, htmlEscape(sess.Name), htmlEscape(sess.Name), htmlEscape(sess.ID), sess.CreatedAt.Format("2006-01-02 15:04"))
+`, html.EscapeString(sess.Name), html.EscapeString(sess.Name), html.EscapeString(sess.ID), sess.CreatedAt.Format("2006-01-02 15:04"))
 
 	for _, m := range sess.Messages {
 		cls := "msg " + m.Role
 		fmt.Fprintf(&sb, `<div class="%s"><span class="role">%s</span><pre>%s</pre></div>`+"\n",
-			htmlEscape(cls), htmlEscape(m.Role), htmlEscape(m.Content))
+			html.EscapeString(cls), html.EscapeString(m.Role), html.EscapeString(m.Content))
 	}
 	sb.WriteString("</body></html>\n")
 
@@ -589,10 +589,5 @@ func matchGlob(pattern, name string) bool {
 	// We'll use filepath.Match which handles * and ?
 	matched, _ := filepath.Match(pattern, name)
 	return matched
-}
-
-
-func htmlEscape(s string) string {
-	return html.EscapeString(s)
 }
 

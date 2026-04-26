@@ -100,7 +100,11 @@ func (t Bash) Execute(ctx context.Context, args json.RawMessage, update ToolUpda
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	// Run command
+	// Run command.
+	// NOTE: cmd.Env is intentionally left unset so the subprocess inherits the
+	// parent environment (user shell, PATH, etc.). This also exposes any API keys
+	// or credentials present in the environment to the executed command. Callers
+	// that need isolation should set DenyPatterns or use a sandboxing extension.
 	cmd := exec.CommandContext(ctx, "bash", "-c", params.Command)
 	cmd.Dir = cwd
 
