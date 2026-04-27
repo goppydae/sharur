@@ -14,6 +14,7 @@ import (
 
 	"github.com/goppydae/gollm/internal/events"
 	"github.com/goppydae/gollm/internal/llm"
+	"github.com/goppydae/gollm/internal/session"
 	"github.com/goppydae/gollm/internal/tools"
 	"github.com/goppydae/gollm/internal/types"
 )
@@ -174,6 +175,10 @@ type Agent struct {
 		ReserveTokens    int
 		KeepRecentTokens int
 	}
+
+	// New: Session management
+	mgr  *session.Manager
+	sess *session.Session
 }
 
 // GetInfo returns the current model's provider info.
@@ -229,6 +234,10 @@ func (a *Agent) State() *AgentState {
 	stateCopy.Compaction.Enabled = a.compaction.Enabled
 	stateCopy.Compaction.ReserveTokens = a.compaction.ReserveTokens
 	stateCopy.Compaction.KeepRecentTokens = a.compaction.KeepRecentTokens
+	if a.state.LatestCompaction != nil {
+		lc := *a.state.LatestCompaction
+		stateCopy.LatestCompaction = &lc
+	}
 	return &stateCopy
 }
 
@@ -242,7 +251,7 @@ func (a *Agent) SetSystemPrompt(prompt string) {
 	a.state.SystemPrompt = prompt
 }
 
-// SetModel sets the model name.
+// SetModel sets the model name and records it in the session if manager is present.
 func (a *Agent) SetModel(model string) {
 	if a.IsRunning() {
 		return
@@ -250,10 +259,12 @@ func (a *Agent) SetModel(model string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.Model = model
-	a.state.Session.Model = model
+	if a.mgr != nil && a.sess != nil && a.state.Provider != "" {
+		_ = a.mgr.AppendModelChange(a.sess, a.state.Provider, model)
+	}
 }
 
-// SetThinkingLevel sets the thinking level.
+// SetThinkingLevel sets the thinking level and records it in the session if manager is present.
 func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
 	if a.IsRunning() {
 		return
@@ -261,7 +272,9 @@ func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.Thinking = level
-	a.state.Session.Thinking = level
+	if a.mgr != nil && a.sess != nil {
+		_ = a.mgr.AppendThinkingLevelChange(a.sess, string(level))
+	}
 }
 
 // SetMaxTokens sets the maximum tokens for LLM responses.
@@ -309,18 +322,44 @@ func (a *Agent) SetSessionName(name string) {
 	a.state.Session.Name = name
 }
 
-// SetProvider sets the LLM provider.
+// SetProvider sets the LLM provider and records it in the session if manager is present.
 func (a *Agent) SetProvider(provider llm.Provider) {
 	if a.IsRunning() {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.state.Provider = provider.Info().Name
-	a.state.Session.Provider = provider.Info().Name
-	a.state.Model = provider.Info().Model
-	a.state.Session.Model = provider.Info().Model
+	info := provider.Info()
+	a.state.Provider = info.Name
+	a.state.Model = info.Model
 	a.provider = provider
+
+	if a.mgr != nil && a.sess != nil {
+		_ = a.mgr.AppendModelChange(a.sess, info.Name, info.Model)
+	}
+}
+
+// SetSession attaches a session manager and session to the agent.
+func (a *Agent) SetSession(mgr *session.Manager, sess *session.Session) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mgr = mgr
+	a.sess = sess
+	if sess != nil {
+		a.state.Messages = sess.Messages
+		if sess.Model != "" {
+			a.state.Model = sess.Model
+		}
+		if sess.Provider != "" {
+			a.state.Provider = sess.Provider
+		}
+		if sess.Thinking != "" {
+			a.state.Thinking = ThinkingLevel(sess.Thinking)
+		}
+		a.state.LatestCompaction = sess.LatestCompaction
+		a.state.Session.ID = sess.ID
+		a.state.Session.Name = sess.Name
+	}
 }
 
 // SetExtensions sets the active extensions for the agent.
@@ -362,18 +401,25 @@ func (a *Agent) Prompt(ctx context.Context, text string, images ...Image) error 
 	a.stopping.Store(false)
 
 	// Add user message
-	msg := Message{Role: "user", Content: text}
+	msg := Message{Role: "user", Content: text, Timestamp: time.Now()}
 	if len(images) > 0 {
 		msg.Images = images
 	}
 
-	msg.Timestamp = time.Now()
 	a.mu.Lock()
 	if a.state.Session.Name == "" && text != "" && text != "Continue" {
 		a.state.Session.Name = text
+		if a.mgr != nil && a.sess != nil {
+			_ = a.mgr.AppendSessionInfo(a.sess, text)
+		}
 	}
-	a.state.Messages = append(a.state.Messages, msg)
-	a.state.Session.UpdatedAt = time.Now()
+
+	if a.mgr != nil && a.sess != nil {
+		_, _ = a.mgr.AppendMessage(a.sess, msg)
+		a.state.Messages = a.sess.Messages // Sync back
+	} else {
+		a.state.Messages = append(a.state.Messages, msg)
+	}
 	a.mu.Unlock()
 
 	// Emit event
@@ -616,29 +662,44 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 		return
 	}
 
-	// 7. Rebuild History
-	newMessages := make([]Message, 0, 1+len(a.state.Messages)-cutResult.FirstKeptIndex+1)
+	// 7. Record Compaction State
+	firstKeptID := ""
+	if cutResult.FirstKeptIndex < len(a.state.Messages) {
+		firstKeptID = a.state.Messages[cutResult.FirstKeptIndex].ID
+	}
 	
-	// Add the main iterative summary
-	newMessages = append(newMessages, Message{
+	a.state.LatestCompaction = &types.CompactionState{
+		Summary:          summaryText,
+		FirstKeptEntryID: firstKeptID,
+	}
+	
+	// Add the summary message to the history for display as a "system notice"
+	summaryMsg := Message{
+		ID:        uuid.New().String(),
 		Role:      "success",
 		Content:   summaryText,
 		Timestamp: time.Now(),
-	})
-
-	// Add split turn prefix summary if needed
+	}
+	
+	// Insert it at the boundary to show where compaction happened in the transcript
+	messages = make([]Message, 0, len(a.state.Messages)+1)
+	messages = append(messages, a.state.Messages[:cutResult.FirstKeptIndex]...)
+	messages = append(messages, summaryMsg)
 	if cutResult.IsSplitTurn && turnPrefixSummary != "" {
-		newMessages = append(newMessages, Message{
+		messages = append(messages, Message{
+			ID:        uuid.New().String(),
 			Role:      "success",
 			Content:   "**Turn Context (split turn):**\n\n" + turnPrefixSummary,
 			Timestamp: time.Now(),
 		})
 	}
+	messages = append(messages, a.state.Messages[cutResult.FirstKeptIndex:]...)
+	a.state.Messages = messages
 
-	// Add kept tail
-	newMessages = append(newMessages, a.state.Messages[cutResult.FirstKeptIndex:]...)
-
-	a.state.Messages = newMessages
+	// Record in session tree
+	if a.mgr != nil && a.sess != nil {
+		_ = a.mgr.AppendCompaction(a.sess, summaryText, firstKeptID, tokensBefore)
+	}
 
 	tokensAfter := a.estimateContextTokensNoLock()
 	freed = tokensBefore - tokensAfter
@@ -646,6 +707,19 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 		freed = 0
 	}
 }
+
+func (a *Agent) appendMessage(msg Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.mgr != nil && a.sess != nil {
+		_, _ = a.mgr.AppendMessage(a.sess, msg)
+		a.state.Messages = a.sess.Messages
+	} else {
+		a.state.Messages = append(a.state.Messages, msg)
+	}
+}
+
 
 type cutResult struct {
 	FirstKeptIndex int
@@ -878,11 +952,54 @@ func (a *Agent) estimateContextTokensNoLock() int {
 	// System prompt
 	total += a.estimateMessageTokens(Message{Role: "system", Content: a.state.SystemPrompt})
 
-	// Messages
-	for _, m := range a.state.Messages {
+	// Messages (use LLM-facing context messages)
+	for _, m := range a.buildLlmMessagesNoLock() {
 		total += a.estimateMessageTokens(m)
 	}
 	return total
+}
+
+// buildLlmMessages returns the slice of messages to be sent to the LLM.
+func (a *Agent) buildLlmMessages() []Message {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.buildLlmMessagesNoLock()
+}
+
+func (a *Agent) buildLlmMessagesNoLock() []Message {
+	if a.state.LatestCompaction == nil {
+		msgs := make([]Message, len(a.state.Messages))
+		copy(msgs, a.state.Messages)
+		return msgs
+	}
+
+	lc := a.state.LatestCompaction
+	res := make([]Message, 0, len(a.state.Messages)+1)
+	
+	// Add summary message
+	res = append(res, Message{
+		Role:    "success",
+		Content: lc.Summary,
+	})
+
+	// Find the boundary and add the tail
+	found := false
+	for _, m := range a.state.Messages {
+		if !found && m.ID == lc.FirstKeptEntryID {
+			found = true
+		}
+		if found {
+			res = append(res, m)
+		}
+	}
+	
+	// If boundary ID was not found (shouldn't happen with proper session management),
+	// fallback to full history to avoid data loss.
+	if !found && lc.FirstKeptEntryID != "" {
+		return a.state.Messages
+	}
+
+	return res
 }
 
 func (a *Agent) estimateMessageTokens(m Message) int {
@@ -949,47 +1066,6 @@ func (a *Agent) ResetSession(id string) {
 	a.events.Publish(Event{Type: EventQueueUpdate})
 }
 
-// LoadSession replaces the agent's state with the given session.
-func (a *Agent) LoadSession(sess *types.Session) {
-	if a.IsRunning() {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.state.Session = *sess
-	a.state.Messages = make([]Message, len(sess.Messages))
-	copy(a.state.Messages, sess.Messages)
-
-	if sess.Model != "" {
-		a.state.Model = sess.Model
-	} else {
-		a.state.Session.Model = a.state.Model
-	}
-
-	if sess.Provider != "" {
-		a.state.Provider = sess.Provider
-	} else {
-		a.state.Session.Provider = a.state.Provider
-	}
-
-	if sess.Thinking != "" {
-		a.state.Thinking = ThinkingLevel(sess.Thinking)
-	} else {
-		a.state.Session.Thinking = a.state.Thinking
-	}
-
-	a.state.SystemPrompt = sess.SystemPrompt
-	a.state.MaxTokens = sess.MaxTokens
-	a.state.Temperature = sess.Temperature
-	if sess.DryRun {
-		a.state.DryRun = sess.DryRun
-	}
-	if sess.CompactionEnabled || sess.CompactionReserve > 0 || sess.CompactionKeep > 0 {
-		a.state.Compaction.Enabled = sess.CompactionEnabled
-		a.state.Compaction.ReserveTokens = sess.CompactionReserve
-		a.state.Compaction.KeepRecentTokens = sess.CompactionKeep
-	}
-}
 
 // InvokeTool manually triggers a tool call as if it came from the assistant.
 // It executes the tool, records the result, and then starts the agent loop
@@ -1009,8 +1085,7 @@ func (a *Agent) InvokeTool(ctx context.Context, name string, args string) error 
 	id := "user-call-" + uuid.New().String()[:8]
 
 	// 2. Add assistant message with tool call
-	a.mu.Lock()
-	a.state.Messages = append(a.state.Messages, Message{
+	a.appendMessage(Message{
 		Role: "assistant",
 		ToolCalls: []types.ToolCall{{
 			ID:   id,
@@ -1019,7 +1094,6 @@ func (a *Agent) InvokeTool(ctx context.Context, name string, args string) error 
 		}},
 		Timestamp: time.Now(),
 	})
-	a.mu.Unlock()
 
 	// 3. Emit events
 	a.events.Publish(Event{Type: EventAgentStart})
@@ -1065,7 +1139,14 @@ func (a *Agent) InvokeTool(ctx context.Context, name string, args string) error 
 	return nil
 }
 
-// GetSession returns a copy of the current session.
+// Session returns the current session object.
+func (a *Agent) Session() *session.Session {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.sess
+}
+
+// GetSession returns a copy of the current session types.
 func (a *Agent) GetSession() *types.Session {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

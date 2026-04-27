@@ -46,7 +46,7 @@ func rootCmd() *cobra.Command {
 		continueSession bool
 		resumeSession   string
 		noSession       bool
-		forkSession     string
+		branchSession   string
 		sessionPath     string
 		sessionDir      string
 		// System prompt flags
@@ -113,7 +113,7 @@ func rootCmd() *cobra.Command {
 
 			// --export
 			if exportFile != "" {
-				res := resolveSession(cmd, continueSession, resumeSession, forkSession, sessionPath)
+				res := resolveSession(cmd, continueSession, resumeSession, branchSession, sessionPath)
 				return runExport(cfg, exportFile, res)
 			}
 
@@ -315,7 +315,7 @@ func rootCmd() *cobra.Command {
  			}
  			defer cleanup()
  
- 			preloadSession := resolveSession(cmd, continueSession, resumeSession, forkSession, sessionPath)
+ 			preloadSession := resolveSession(cmd, continueSession, resumeSession, branchSession, sessionPath)
  			sessionID := ""
  
  			// Initial session setup via service
@@ -323,20 +323,16 @@ func rootCmd() *cobra.Command {
  				var resp *pb.NewSessionResponse
  				var err error
  				switch {
- 				case strings.HasPrefix(preloadSession, "fork:"):
- 					id := strings.TrimPrefix(preloadSession, "fork:")
- 					fresp, ferr := client.ForkSession(context.Background(), &pb.ForkSessionRequest{SessionId: id})
+ 				case strings.HasPrefix(preloadSession, "branch:"):
+ 					id := strings.TrimPrefix(preloadSession, "branch:")
+ 					fresp, ferr := client.BranchSession(context.Background(), &pb.BranchSessionRequest{SessionId: id, MessageIndex: -1})
  					if ferr == nil {
  						sessionID = fresp.SessionId
  					}
  				case preloadSession == "continue":
- 					list, lerr := mgr.List()
- 					if lerr != nil {
- 						fmt.Fprintf(os.Stderr, "warning: could not list sessions to continue: %v\n", lerr)
- 					} else if len(list) == 0 {
- 						fmt.Fprintln(os.Stderr, "warning: no sessions found to continue; starting a new session")
- 					} else {
- 						sessionID = list[len(list)-1]
+ 					sessionID = mgr.LatestWithMessages()
+ 					if sessionID == "" {
+ 						fmt.Fprintln(os.Stderr, "warning: no sessions with content found to continue; starting a new session")
  					}
  				case strings.HasPrefix(preloadSession, "resume:"):
  					sessionID = strings.TrimPrefix(preloadSession, "resume:")
@@ -399,7 +395,10 @@ func rootCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&resumeSession, "resume", "r", "", "Select a session to resume, or provide a session ID")
 	cmd.Flags().Lookup("resume").NoOptDefVal = " " // allow bare --resume
 	cmd.Flags().BoolVar(&noSession, "no-session", false, "Ephemeral mode: don't save the session")
-	cmd.Flags().StringVar(&forkSession, "fork", "", "Fork a session file or partial UUID into a new session")
+	cmd.Flags().StringVar(&branchSession, "branch", "", "Branch from a session file or partial UUID into a new child session")
+	// --fork is kept as a deprecated alias for --branch.
+	cmd.Flags().StringVar(&branchSession, "fork", "", "Deprecated: use --branch")
+	_ = cmd.Flags().MarkHidden("fork")
 	cmd.Flags().StringVar(&sessionPath, "session", "", "Use a specific session file")
 	cmd.Flags().StringVar(&sessionDir, "session-dir", "", "Directory for session storage and lookup")
 
@@ -515,10 +514,10 @@ func runExport(cfg *config.Config, dest string, preloadSession string) error {
 	return exportSessionHTML(sess, dest)
 }
 
-func resolveSession(cmd *cobra.Command, continueSession bool, resumeSession string, forkSession string, sessionPath string) string {
+func resolveSession(cmd *cobra.Command, continueSession bool, resumeSession string, branchSession string, sessionPath string) string {
 	switch {
-	case forkSession != "":
-		return "fork:" + forkSession
+	case branchSession != "":
+		return "branch:" + branchSession
 	case continueSession:
 		return "continue"
 	case cmd.Flags().Changed("resume"):

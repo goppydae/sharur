@@ -29,6 +29,7 @@ func DarkTheme() *Theme {
 		WorkingColor: AdaptiveColor{Light: "#6366f1", Dark: "#818cf8"},
 		UserMsgBg:   AdaptiveColor{Light: "#f8fafc", Dark: "#18181b"}, // Zinc 900
 		AssistantBg: AdaptiveColor{Light: "#e0e7ff", Dark: "#1e1b4b"}, // Deep Indigo
+		CodeBg:      AdaptiveColor{Light: "#0f0e26", Dark: "#0f0e26"}, // Darker Indigo
 		ErrorBg:       AdaptiveColor{Light: "#fef2f2", Dark: "#450a0a"},
 		WarningBg:     AdaptiveColor{Light: "#fffbeb", Dark: "#451a03"},
 		InfoBg:        AdaptiveColor{Light: "#f0f9ff", Dark: "#082f49"},
@@ -62,6 +63,7 @@ func LightTheme() *Theme {
 		WorkingColor: AdaptiveColor{Light: "#2563eb", Dark: "#3b82f6"},
 		UserMsgBg:   AdaptiveColor{Light: "#ffffff", Dark: "#0f172a"}, // White
 		AssistantBg: AdaptiveColor{Light: "#eff6ff", Dark: "#1e293b"}, // Blue 50
+		CodeBg:      AdaptiveColor{Light: "#0f172a", Dark: "#0f172a"}, // Darker Slate
 		ErrorBg:       AdaptiveColor{Light: "#fef2f2", Dark: "#450a0a"},
 		WarningBg:     AdaptiveColor{Light: "#fffbeb", Dark: "#451a03"},
 		InfoBg:        AdaptiveColor{Light: "#f0f9ff", Dark: "#082f49"},
@@ -95,6 +97,7 @@ func CyberpunkTheme() *Theme {
 		WorkingColor: AdaptiveColor{Light: "#33ff33", Dark: "#33ff33"},
 		UserMsgBg:   AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"}, // Lighter Gray
 		AssistantBg: AdaptiveColor{Light: "#003300", Dark: "#002800"}, // Lighter Green
+		CodeBg:      AdaptiveColor{Light: "#001400", Dark: "#001400"}, // Darker Green
 		ErrorBg:       AdaptiveColor{Light: "#1a0000", Dark: "#0d0000"},
 		WarningBg:     AdaptiveColor{Light: "#1a1a00", Dark: "#0d0d00"},
 		InfoBg:        AdaptiveColor{Light: "#001a00", Dark: "#000d00"},
@@ -128,6 +131,7 @@ func SynthwaveTheme() *Theme {
 		WorkingColor: AdaptiveColor{Light: "#ff71ce", Dark: "#ff71ce"},
 		UserMsgBg:   AdaptiveColor{Light: "#1a0a2e", Dark: "#0f0520"}, // darker purple
 		AssistantBg: AdaptiveColor{Light: "#2a1b3d", Dark: "#1a0f2e"}, // deep purple
+		CodeBg:      AdaptiveColor{Light: "#0d0820", Dark: "#0d0820"}, // Darkest Purple
 		ErrorBg:       AdaptiveColor{Light: "#2e0a1a", Dark: "#1f0510"}, // red-purple
 		WarningBg:     AdaptiveColor{Light: "#2e2e0a", Dark: "#1f1f05"}, // yellow tint
 		InfoBg:        AdaptiveColor{Light: "#0a2e2e", Dark: "#051f1f"}, // cyan tint

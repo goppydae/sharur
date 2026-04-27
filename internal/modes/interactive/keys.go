@@ -77,8 +77,8 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("shift+tab"),
 		),
 		Help: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "toggle help"),
+			key.WithKeys("f1"),
+			key.WithHelp("f1", "toggle help"),
 		),
 	}
 }

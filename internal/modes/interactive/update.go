@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -13,6 +14,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/stopwatch"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 
 	pb "github.com/goppydae/gollm/internal/gen/gollm/v1"
 	"github.com/goppydae/gollm/internal/prompts"
@@ -43,7 +45,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetHeight(m.currentInputHeight())
 
 	case agentEventMsg:
-		return m.handleAgentEvent(msg.ev)
+		cmd = m.handleAgentEvent(msg.ev)
 
 	case tea.MouseWheelMsg:
 		if !m.modal.visible {
@@ -67,6 +69,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stopwatch.ResetMsg:
 		m.stopwatch, cmd = m.stopwatch.Update(msg)
+		m.refreshViewport()
 
 	case progress.FrameMsg:
 		if m.isRunning || m.isCompacting.Load() {
@@ -88,6 +91,46 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stopwatch.StartStopMsg:
 		m.stopwatch, cmd = m.stopwatch.Update(msg)
+		m.refreshViewport()
+
+	case syncHistoryMsg:
+		if msg.err != nil {
+			m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("History sync failed: %v", msg.err)}}})
+		} else {
+			m.applyHistorySync(msg.messages)
+		}
+
+	case syncStateMsg:
+		if msg.err != nil {
+			// Fail silently or log
+		} else {
+			m.applyStateSync(msg.state)
+		}
+
+	case compactDoneMsg:
+		m.isCompacting.Store(false)
+		if !m.isRunning {
+			cmd = m.stopwatch.Stop()
+		}
+		if msg.err != nil {
+			m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Compaction failed: %v", msg.err)}}})
+		}
+		m.refreshViewport()
+		cmd = tea.Batch(cmd, m.syncHistoryCmd(), m.syncStateCmd())
+
+	case errorMsg:
+		m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: msg.err.Error()}}})
+		m.refreshViewport()
+
+	case sessionSwitchMsg:
+		m.sessionID = msg.sessionID
+		m.history = nil
+		if msg.initialMsg != nil {
+			m.history = []historyEntry{*msg.initialMsg}
+		}
+		m.newContext()
+		m.refreshViewport()
+		cmd = tea.Batch(m.syncHistoryCmd(), m.syncStateCmd(), listenForEvent(m.eventCh))
 	}
 
 	if m.isRunning || m.isCompacting.Load() {
@@ -317,15 +360,22 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: err.Error()}}})
 			} else if result != nil {
+				var cmds []tea.Cmd
 				if result.newSessionID != "" {
-					m.sessionID = result.newSessionID
-					m.newContext()
-				}
-				if result.syncHistory {
-					m.syncHistoryFromService()
-				}
-				if len(result.historyEntry.items) > 0 {
-					m.history = append(m.history, result.historyEntry)
+					initialMsg := &result.historyEntry
+					if len(initialMsg.items) == 0 {
+						initialMsg = nil
+					}
+					cmds = append(cmds, func() tea.Msg {
+						return sessionSwitchMsg{sessionID: result.newSessionID, initialMsg: initialMsg}
+					})
+				} else {
+					if result.syncHistory {
+						cmds = append(cmds, m.syncHistoryCmd())
+					}
+					if len(result.historyEntry.items) > 0 {
+						m.history = append(m.history, result.historyEntry)
+					}
 				}
 				if result.modalKind != modalNone {
 					switch result.modalKind {
@@ -346,18 +396,23 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 						} else {
 							m.openModal(modalTree)
 						}
+					case modalRebase:
+						if len(result.modalMessages) > 0 {
+							m.modal.openRebaseModal(result.modalMessages, m.style)
+						}
 					default:
 						m.openModal(result.modalKind)
 					}
 				}
 				if result.compact {
 					m.isCompacting.Store(true)
-					go func() {
-						_, _ = m.client.Compact(context.Background(), &pb.CompactRequest{SessionId: m.sessionID})
-						m.isCompacting.Store(false)
-						m.syncHistoryFromService()
-					}()
-					return m, tea.Batch(m.spinner.Tick, listenForEvent(m.eventCh))
+					return m, tea.Batch(
+						m.spinner.Tick,
+						m.stopwatch.Reset(),
+						m.stopwatch.Start(),
+						m.compactCmd(),
+						listenForEvent(m.eventCh),
+					)
 				}
 				if result.quit {
 					return m, tea.Quit
@@ -395,8 +450,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					if promErr := m.promptGRPC(m.ctx, result.invokeToolArgs); promErr != nil {
 						m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Tool invocation failed: %v", promErr)}}})
 					}
-					return m, listenForEvent(m.eventCh)
+					return m, tea.Batch(append(cmds, listenForEvent(m.eventCh))...)
 				}
+				return m.refreshViewport(), tea.Batch(append(cmds, listenForEvent(m.eventCh))...)
 			}
 			return m.refreshViewport(), listenForEvent(m.eventCh)
 		}
@@ -543,20 +599,54 @@ func (m *model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.Enter):
 		if m.modal.kind == modalTree {
-			selected := m.modal.list.SelectedItem().(treeItem).node.Node.ID
+			item := m.modal.list.SelectedItem().(treeItem)
+			selected := item.node.Node.ID
+			role := item.node.Node.Role
+			content := item.node.Node.Content
+			parentID := ""
+			if item.node.Node.ParentID != nil {
+				parentID = *item.node.Node.ParentID
+			}
+
 			m.modal.close()
-			m.sessionID = selected
-			m.newContext()
-			m.syncHistoryFromService()
-			m.history = append(m.history, historyEntry{role: "info", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Switched to session: %s", selected)}}})
-			return m.refreshViewport(), listenForEvent(m.eventCh)
+
+			if role == "user" {
+				// Branch from parent and set editor (pi-mono style)
+				m.input.SetValue(content)
+				branchTarget := parentID
+				if branchTarget == "" {
+					branchTarget = selected // Fallback if no parent
+				}
+				return m, func() tea.Msg {
+					resp, err := m.client.BranchSession(context.Background(), &pb.BranchSessionRequest{
+						SessionId: m.sessionID,
+						TargetId:  branchTarget,
+					})
+					if err != nil {
+						return errorMsg{err: fmt.Errorf("branch failed: %v", err)}
+					}
+					return sessionSwitchMsg{sessionID: resp.SessionId}
+				}
+			}
+
+			return m, func() tea.Msg {
+				resp, err := m.client.BranchSession(context.Background(), &pb.BranchSessionRequest{
+					SessionId: m.sessionID,
+					TargetId:  selected,
+				})
+				if err != nil {
+					// Fallback to resume if branching fails
+					return sessionSwitchMsg{sessionID: selected}
+				}
+				return sessionSwitchMsg{sessionID: resp.SessionId}
+			}
 		}
 		if m.modal.kind == modalModels {
 			selected := m.modal.list.SelectedItem().(modelItem)
 			m.modal.close()
 			m.modelName = selected.name
 			m.provider = selected.provider
-			
+
 			// Update the service
 			_, err := m.client.ConfigureSession(context.Background(), &pb.ConfigureSessionRequest{
 				SessionId: m.sessionID,
@@ -570,32 +660,133 @@ func (m *model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.refreshViewport(), listenForEvent(m.eventCh)
 		}
+		if m.modal.kind == modalConfig && m.modal.form != nil {
+			nm, _ := m.modal.form.Update(msg)
+			if f, ok := nm.(*huh.Form); ok {
+				m.modal.form = f
+			}
+			if m.modal.form.State == huh.StateCompleted {
+				m.saveConfigFromForm()
+				m.modal.close()
+				return m, nil
+			}
+			return m, nil
+		}
 		m.modal.close()
 		return m, nil
-
 	case m.modal.kind == modalTree && k.Code == 'b':
 		selected := m.modal.list.SelectedItem().(treeItem).node.Node.ID
 		m.modal.close()
 
-		resp, err := m.client.ForkSession(context.Background(), &pb.ForkSessionRequest{SessionId: selected})
-		if err != nil {
-			m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Failed to fork session: %v", err)}}})
+		return m, func() tea.Msg {
+			resp, err := m.client.BranchSession(context.Background(), &pb.BranchSessionRequest{
+				SessionId: m.sessionID,
+				TargetId:  selected,
+			})
+			if err != nil {
+				return errorMsg{err: fmt.Errorf("failed to branch session: %v", err)}
+			}
+			return sessionSwitchMsg{sessionID: resp.SessionId}
+		}
+
+	case m.modal.kind == modalTree && k.Code == 'f':
+		selected := m.modal.list.SelectedItem().(treeItem).node.Node.ID
+		m.modal.close()
+
+		return m, func() tea.Msg {
+			resp, err := m.client.ForkSession(context.Background(), &pb.ForkSessionRequest{SessionId: selected})
+			if err != nil {
+				return errorMsg{err: fmt.Errorf("failed to fork session: %v", err)}
+			}
+			return sessionSwitchMsg{sessionID: resp.SessionId}
+		}
+
+	case m.modal.kind == modalTree && k.Code == 'r':
+		selected := m.modal.list.SelectedItem().(treeItem).node.Node.ID
+		m.modal.close()
+
+		return m, func() tea.Msg {
+			msgsResp, err := m.client.GetMessages(context.Background(), &pb.GetMessagesRequest{SessionId: selected})
+			if err != nil {
+				return errorMsg{err: fmt.Errorf("failed to load messages for rebase: %v", err)}
+			}
+			m.modal.openRebaseModal(buildRebaseItemsFromMsgs(msgsResp.Messages), m.style)
+			return nil
+		}
+
+	// ── Rebase modal keys ─────────────────────────────────────────────────────
+	case m.modal.kind == modalRebase && k.Code == ' ':
+		idx := m.modal.list.Index()
+		items := m.modal.list.Items()
+		if idx < len(items) {
+			ri := items[idx].(rebaseItem)
+			ri.checked = !ri.checked
+			if !ri.checked {
+				ri.squash = false
+			}
+			m.modal.list.SetItem(idx, ri)
+		}
+		return m, nil
+
+	case m.modal.kind == modalRebase && k.Code == 's':
+		idx := m.modal.list.Index()
+		items := m.modal.list.Items()
+		if idx < len(items) {
+			ri := items[idx].(rebaseItem)
+			ri.squash = !ri.squash
+			ri.checked = ri.squash || ri.checked
+			m.modal.list.SetItem(idx, ri)
+		}
+		return m, nil
+
+	case m.modal.kind == modalRebase && k.Code == 'a':
+		items := m.modal.list.Items()
+		// Determine majority state: if most are checked, uncheck all; else check all.
+		checkedCount := 0
+		for _, item := range items {
+			if item.(rebaseItem).checked {
+				checkedCount++
+			}
+		}
+		newChecked := checkedCount < len(items)/2+1
+		for i, item := range items {
+			ri := item.(rebaseItem)
+			ri.checked = newChecked
+			if !newChecked {
+				ri.squash = false
+			}
+			m.modal.list.SetItem(i, ri)
+		}
+		return m, nil
+
+	case m.modal.kind == modalRebase && key.Matches(msg, m.keys.Enter):
+		keep, squash := m.modal.rebaseCheckedIndices()
+		m.modal.close()
+
+		if len(keep)+len(squash) == 0 {
+			m.history = append(m.history, historyEntry{role: "system", items: []contentItem{{kind: contentItemText, text: "Rebase cancelled: no messages selected."}}})
 			return m.refreshViewport(), listenForEvent(m.eventCh)
 		}
 
-		m.sessionID = resp.SessionId
-		m.newContext()
-		m.syncHistoryFromService()
-		m.history = append(m.history, historyEntry{role: "info", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Branched from session: %s", selected)}}})
-		m.history = append(m.history, historyEntry{role: "info", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("New session created: %s", resp.SessionId)}}})
-		return m.refreshViewport(), listenForEvent(m.eventCh)
+		return m, func() tea.Msg {
+			allIndices := append(keep, squash...)
+			resp, err := m.client.RebaseSession(context.Background(), &pb.RebaseSessionRequest{
+				SessionId:  m.sessionID,
+				MsgIndices: allIndices,
+				Squash:     len(squash) > 0,
+			})
+			if err != nil {
+				return errorMsg{err: fmt.Errorf("rebase failed: %v", err)}
+			}
+			return sessionSwitchMsg{sessionID: resp.SessionId}
+		}
 	}
 
 	var cmd tea.Cmd
 	switch m.modal.kind {
 	case modalStats, modalConfig:
 		m.modal.table, cmd = m.modal.table.Update(msg)
-	case modalTree:
+	case modalTree, modalRebase:
 		m.modal.list, cmd = m.modal.list.Update(msg)
 	}
 
@@ -620,7 +811,7 @@ func (m *model) updatePicker() *model {
 				firstMsg = firstMsg[:37] + "..."
 			}
 			firstMsg = strings.ReplaceAll(firstMsg, "\n", " ")
-			
+
 			// Format columns: Full ID | Message | Created | Updated
 			items = append(items, pickerItem{
 				kind:        kind,
@@ -732,5 +923,42 @@ func (m *model) updatePicker() *model {
 func (m *model) openModal(kind modalKind) {
 	m.modal.kind = kind
 	m.modal.visible = true
+}
+
+func (m *model) saveConfigFromForm() {
+	if m.modal.form == nil {
+		return
+	}
+
+	model := m.modal.form.GetString("model")
+	provider := m.modal.form.GetString("provider")
+	thinking := m.modal.form.GetString("thinking")
+	theme := m.modal.form.GetString("theme")
+	_ = theme
+	compaction := m.modal.form.GetBool("compaction")
+	reserveStr := m.modal.form.GetString("reserve")
+	reserve, _ := strconv.Atoi(reserveStr)
+
+	m.modelName = model
+	m.provider = provider
+	m.thinking = thinking
+
+	// Update the service
+	req := &pb.ConfigureSessionRequest{
+		SessionId:     m.sessionID,
+		Model:         &model,
+		Provider:      &provider,
+		ThinkingLevel: &thinking,
+		Compaction: &pb.CompactionConfig{
+			Enabled:       compaction,
+			ReserveTokens: int32(reserve),
+		},
+	}
+	_, err := m.client.ConfigureSession(context.Background(), req)
+	if err != nil {
+		m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Failed to update config: %v", err)}}})
+	} else {
+		m.history = append(m.history, historyEntry{role: "info", items: []contentItem{{kind: contentItemText, text: "Configuration updated"}}})
+	}
 }
 

@@ -11,23 +11,59 @@ import (
 	"time"
 )
 
+const (
+	TypeSession             = "session"
+	TypeMessage             = "message"
+	TypeModelChange         = "model_change"
+	TypeThinkingLevelChange = "thinking_level_change"
+	TypeCompaction          = "compaction"
+	TypeBranchSummary       = "branch_summary"
+	TypeCustom              = "custom"
+	TypeCustomMessage       = "custom_message"
+	TypeLabel               = "label"
+	TypeSessionInfo         = "session_info"
+)
+
 // record is a single JSONL line in a session file.
-// Each message is written as its own line; the header line (index 0) stores session metadata.
 type record struct {
-	Kind      string          `json:"kind"`                // "header" | "message"
-	ID        string          `json:"id,omitempty"`
-	ParentID  *string         `json:"parentId,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Model     string          `json:"model,omitempty"`
-	Provider  string          `json:"provider,omitempty"`
-	Thinking  string          `json:"thinkingLevel,omitempty"`
-	System    string          `json:"systemPrompt,omitempty"`
-	CreatedAt int64           `json:"createdAt,omitempty"` // unix ms
-	UpdatedAt int64           `json:"updatedAt,omitempty"` // unix ms
-	Role      string          `json:"role,omitempty"`
-	Content   string          `json:"content,omitempty"`
-	Raw       json.RawMessage `json:"raw,omitempty"` // full message payload
+	Type      string   `json:"type"`
+	ID        string   `json:"id,omitempty"`
+	ParentID  *string  `json:"parentId,omitempty"`
+	Timestamp string   `json:"timestamp"` // ISO 8601
+
+	// For "session" (header)
+	Version       int     `json:"version,omitempty"`
+	CWD           string  `json:"cwd,omitempty"`
+	ParentSession *string `json:"parentSession,omitempty"`
+
+	// For "message" and "custom_message"
+	Message *message `json:"message,omitempty"` // nested message object
+
+	// For "model_change"
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"modelId,omitempty"`
+
+	// For "thinking_level_change"
+	ThinkingLevel string `json:"thinkingLevel,omitempty"`
+
+	// For "compaction" and "branch_summary"
+	Summary          string `json:"summary,omitempty"`
+	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
+	TokensBefore     int    `json:"tokensBefore,omitempty"`
+	FromID           string `json:"fromId,omitempty"` // For branch_summary
+
+	// For "label"
+	TargetID string `json:"targetId,omitempty"`
+	Label    string `json:"label,omitempty"`
+
+	// For "session_info"
+	Name string `json:"name,omitempty"`
+
+	// For "custom" and "custom_message"
+	CustomType string          `json:"customType,omitempty"`
+	Data       json.RawMessage `json:"data,omitempty"`
 }
+
 
 // store handles low-level JSONL file I/O for a session directory.
 type store struct {
@@ -65,8 +101,32 @@ func (s *store) path(id string) string {
 	return p // fallback to default
 }
 
-// writePath serialises a Session to JSONL at the given path.
-func (s *store) writePath(sess *Session, path string) error {
+// appendRecord appends a single record to the session file.
+func (s *store) appendRecord(path string, r record) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if r.Timestamp == "" {
+		r.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+
+	enc := json.NewEncoder(f)
+	if err := enc.Encode(r); err != nil {
+		return fmt.Errorf("encode record: %w", err)
+	}
+	return nil
+}
+
+// writePath serialises all entries of a session to JSONL at the given path.
+// This is typically used for initial creation or migration.
+func (s *store) writePath(records []record, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
@@ -78,65 +138,60 @@ func (s *store) writePath(sess *Session, path string) error {
 	defer func() { _ = f.Close() }()
 
 	enc := json.NewEncoder(f)
-
-	// Header line
-	if err := enc.Encode(record{
-		Kind:      "header",
-		ID:        sess.ID,
-		ParentID:  sess.ParentID,
-		Name:      sess.Name,
-		Model:     sess.Model,
-		Provider:  sess.Provider,
-		Thinking:  sess.Thinking,
-		System:    sess.SystemPrompt,
-		CreatedAt: sess.CreatedAt.UnixMilli(),
-		UpdatedAt: sess.UpdatedAt.UnixMilli(),
-	}); err != nil {
-		return err
-	}
-
-	// One line per message
-	for _, m := range sess.Messages {
-		raw, _ := json.Marshal(m)
-		if err := enc.Encode(record{
-			Kind:    "message",
-			Role:    m.Role,
-			Content: m.Content,
-			Raw:     raw,
-		}); err != nil {
+	for _, r := range records {
+		if r.Timestamp == "" {
+			r.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		if err := enc.Encode(r); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// write serialises a Session to JSONL using a timestamped filename in s.dir.
-func (s *store) write(sess *Session) error {
-	path := s.path(sess.ID)
-
-	// If the resolved path doesn't exist yet, it's a new session.
-	// Create a new timestamped filename.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// Format: 2006-01-02T15-04-05-000Z_UUID.jsonl
-		ts := sess.CreatedAt.UTC().Format("2006-01-02T15-04-05-000Z")
-		ts = strings.ReplaceAll(ts, ".", "-")
-		path = filepath.Join(s.dir, ts+"_"+sess.ID+".jsonl")
+// initFile ensures the session file exists, writing a header record if it doesn't.
+// Returns the resolved path for subsequent appends. Called on the first Append* for new sessions.
+func (s *store) initFile(id string, createdAt time.Time, version int) (string, error) {
+	path := s.path(id)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil // already exists
 	}
-
-	return s.writePath(sess, path)
+	ts := createdAt.UTC().Format("2006-01-02T15-04-05-000Z")
+	ts = strings.ReplaceAll(ts, ".", "-")
+	path = filepath.Join(s.dir, ts+"_"+id+".jsonl")
+	header := record{
+		Type:      TypeSession,
+		ID:        id,
+		Version:   version,
+		Timestamp: createdAt.UTC().Format(time.RFC3339Nano),
+	}
+	return path, s.writePath([]record{header}, path)
 }
 
-// readPath deserialises a JSONL session file from the given path back into a Session.
-func (s *store) readPath(path string) (*Session, error) {
+// write serialises a set of records to JSONL using a timestamped filename in s.dir.
+func (s *store) write(id string, records []record) error {
+	path := s.path(id)
+
+	// If the resolved path doesn't exist yet, it's a new session.
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		ts := time.Now().UTC().Format("2006-01-02T15-04-05-000Z")
+		ts = strings.ReplaceAll(ts, ".", "-")
+		path = filepath.Join(s.dir, ts+"_"+id+".jsonl")
+	}
+
+	return s.writePath(records, path)
+}
+
+// readPath deserialises all JSONL records from the given path.
+func (s *store) readPath(path string) ([]record, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 
-	sess := &Session{}
+	var records []record
 	scanner := bufio.NewScanner(f)
-	first := true
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -144,79 +199,67 @@ func (s *store) readPath(path string) (*Session, error) {
 		}
 		var r record
 		if err := json.Unmarshal(line, &r); err != nil {
-			if first {
-				return nil, fmt.Errorf("corrupt session header: %w", err)
-			}
+			// Try to handle legacy records if possible, or skip
 			continue
 		}
-		if first {
-			first = false
-			if r.Kind != "header" || r.ID == "" {
-				return nil, fmt.Errorf("corrupt session header: unexpected kind %q or empty ID", r.Kind)
-			}
-			sess.ID = r.ID
-			sess.ParentID = r.ParentID
-			sess.Name = r.Name
-			sess.Model = r.Model
-			sess.Provider = r.Provider
-			sess.Thinking = r.Thinking
-			sess.SystemPrompt = r.System
-			sess.CreatedAt = time.UnixMilli(r.CreatedAt)
-			sess.UpdatedAt = time.UnixMilli(r.UpdatedAt)
-			continue
-		}
-		if r.Kind == "message" && len(r.Raw) > 0 {
-			var msg message
-			if err := json.Unmarshal(r.Raw, &msg); err == nil {
-				sess.Messages = append(sess.Messages, msg)
+
+		// Backward compatibility: map "kind" to "type" and "system" to "systemPrompt"
+		// This is a rough heuristic for old header records.
+		if r.Type == "" {
+			var legacy map[string]interface{}
+			_ = json.Unmarshal(line, &legacy)
+			if kind, ok := legacy["kind"].(string); ok {
+				r.Type = kind
+				if kind == "header" {
+					r.Type = TypeSession
+				}
 			}
 		}
+
+		records = append(records, r)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	return sess, nil
+	return records, nil
 }
 
-// read deserialises a JSONL session file back into a Session by ID.
-func (s *store) read(id string) (*Session, error) {
+// read deserialises all JSONL records back into a slice by ID.
+func (s *store) read(id string) ([]record, error) {
 	return s.readPath(s.path(id))
 }
 
-// readSummary extracts just the metadata and first message from a session file.
+// readSummary extracts session metadata and the first message for listing purposes.
 func (s *store) readSummary(id string) (*SessionSummary, error) {
 	path := s.path(id)
-	f, err := os.Open(path)
+	records, err := s.readPath(path)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
 
 	sum := &SessionSummary{ID: id}
-	scanner := bufio.NewScanner(f)
-	
-	// Line 1: Header
-	if !scanner.Scan() {
-		return nil, fmt.Errorf("empty session file")
-	}
-	var header record
-	if err := json.Unmarshal(scanner.Bytes(), &header); err == nil && header.Kind == "header" {
-		sum.ID = header.ID
-		sum.ParentID = header.ParentID
-		sum.Name = header.Name
-		if header.CreatedAt > 0 {
-			sum.CreatedAt = time.UnixMilli(header.CreatedAt)
-		}
-		if header.UpdatedAt > 0 {
-			sum.UpdatedAt = time.UnixMilli(header.UpdatedAt)
-		}
-	}
-
-	// Line 2: First Message (optional)
-	if scanner.Scan() {
-		var msg record
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil && msg.Kind == "message" {
-			sum.FirstMessage = msg.Content
+	for _, r := range records {
+		switch r.Type {
+		case TypeSession:
+			if sum.ID == "" || sum.ID == id {
+				sum.ID = r.ID
+			}
+			sum.ParentID = r.ParentID
+			if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
+				sum.CreatedAt = t
+				sum.UpdatedAt = t
+			}
+		case TypeSessionInfo:
+			if r.Name != "" {
+				sum.Name = r.Name
+			}
+		case TypeMessage:
+			if sum.FirstMessage == "" && r.Message != nil {
+				sum.FirstMessage = r.Message.Content
+			}
+			if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
+				sum.UpdatedAt = t
+			}
 		}
 	}
 
@@ -247,9 +290,12 @@ func (s *store) list() ([]string, error) {
 				continue
 			}
 
-			// Use the full filename (minus .jsonl) as the ID for internal tracking.
-			// This ensures path() can find it via a direct file check.
+			// Strip the timestamp prefix (ts_uuid → uuid) so callers always work
+			// with plain UUIDs. path() resolves uuid→ts_uuid.jsonl via suffix search.
 			name := strings.TrimSuffix(e.Name(), ".jsonl")
+			if i := strings.Index(name, "_"); i != -1 {
+				name = name[i+1:]
+			}
 			infos = append(infos, entryInfo{
 				id:    name,
 				mtime: info.ModTime(),

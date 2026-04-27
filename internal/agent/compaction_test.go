@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/goppydae/gollm/internal/llm"
 	"github.com/goppydae/gollm/internal/tools"
 	"github.com/goppydae/gollm/internal/types"
@@ -43,15 +44,15 @@ func newAgentWithMessages(msgs []Message, prov llm.Provider) *Agent {
 }
 
 // TestCompact_SummaryAppearsInHistory verifies that after compaction the history
-// starts with a sentinel-prefixed summary message.
+// contains the sentinel-prefixed summary message at the compaction boundary.
 func TestCompact_SummaryAppearsInHistory(t *testing.T) {
 	wantSummary := summarySentinel + "## Goal\nDo something\n"
 	prov := &summaryProvider{summaryText: wantSummary}
 
 	msgs := []Message{
-		{Role: "user", Content: "hello world", Timestamp: time.Now()},
-		{Role: "assistant", Content: strings.Repeat("word ", 5000), Timestamp: time.Now()},
-		{Role: "user", Content: "ok", Timestamp: time.Now()},
+		{ID: "m1", Role: "user", Content: "hello world", Timestamp: time.Now()},
+		{ID: "m2", Role: "assistant", Content: strings.Repeat("word ", 5000), Timestamp: time.Now()},
+		{ID: "m3", Role: "user", Content: "ok", Timestamp: time.Now()},
 	}
 	ag := newAgentWithMessages(msgs, prov)
 	ag.SetCompactionConfig(true, 512, 512)
@@ -59,34 +60,52 @@ func TestCompact_SummaryAppearsInHistory(t *testing.T) {
 	ag.Compact(context.Background(), 512)
 
 	got := ag.Messages()
-	if len(got) == 0 {
-		t.Fatal("expected messages after compact, got none")
+	if len(got) < 4 {
+		t.Errorf("expected at least 4 messages (3 original + 1 summary), got %d", len(got))
 	}
-	if !strings.HasPrefix(got[0].Content, summarySentinel) {
-		t.Errorf("first message does not start with sentinel; content prefix: %q", got[0].Content[:min(50, len(got[0].Content))])
+	
+	foundSummary := false
+	for _, m := range got {
+		if strings.HasPrefix(m.Content, summarySentinel) {
+			foundSummary = true
+			if m.Role != "success" {
+				t.Errorf("summary message role = %q, want %q", m.Role, "success")
+			}
+			break
+		}
 	}
-	if got[0].Role != "success" {
-		t.Errorf("summary message role = %q, want %q", got[0].Role, "success")
+	if !foundSummary {
+		t.Error("compaction summary not found in history")
 	}
 }
 
-// TestCompact_ReducesMessageCount checks that old messages are removed.
-func TestCompact_ReducesMessageCount(t *testing.T) {
+// TestCompact_ReducesLlmContextButPreservesHistory checks that LLM context is pruned
+// while the full message history is kept in the agent state.
+func TestCompact_ReducesLlmContextButPreservesHistory(t *testing.T) {
 	prov := &summaryProvider{summaryText: summarySentinel + "## Goal\ntest\n"}
 
 	var msgs []Message
 	for i := 0; i < 20; i++ {
-		msgs = append(msgs, Message{Role: "user", Content: strings.Repeat("a", 400), Timestamp: time.Now()})
-		msgs = append(msgs, Message{Role: "assistant", Content: strings.Repeat("b", 400), Timestamp: time.Now()})
+		msgs = append(msgs, Message{ID: uuid.New().String(), Role: "user", Content: strings.Repeat("a", 400), Timestamp: time.Now()})
+		msgs = append(msgs, Message{ID: uuid.New().String(), Role: "assistant", Content: strings.Repeat("b", 400), Timestamp: time.Now()})
 	}
 	ag := newAgentWithMessages(msgs, prov)
 
 	before := len(msgs)
 	ag.Compact(context.Background(), 1000)
-	after := len(ag.Messages())
+	
+	historyCount := len(ag.Messages())
+	if historyCount <= before {
+		t.Errorf("expected history count to increase (original + summary), got %d <= %d", historyCount, before)
+	}
 
-	if after >= before {
-		t.Errorf("compact did not reduce message count: before=%d after=%d", before, after)
+	llmMsgs := ag.buildLlmMessages()
+	if len(llmMsgs) >= before {
+		t.Errorf("LLM context did not reduce: llmMsgs=%d before=%d", len(llmMsgs), before)
+	}
+	
+	if !strings.HasPrefix(llmMsgs[0].Content, summarySentinel) {
+		t.Errorf("first LLM message should be the summary, got role=%q content=%q", llmMsgs[0].Role, llmMsgs[0].Content)
 	}
 }
 
@@ -251,11 +270,4 @@ func (c *captureProvider) Stream(_ context.Context, req *llm.CompletionRequest) 
 
 func (c *captureProvider) Info() llm.ProviderInfo {
 	return llm.ProviderInfo{Name: "mock", Model: "test", ContextWindow: 100000}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

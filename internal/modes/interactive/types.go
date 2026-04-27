@@ -165,3 +165,31 @@ type Theme = themes.Theme
 type Style = themes.Style
 
 type initialPromptMsg struct{}
+
+// syncHistoryMsg carries updated messages back to the model.
+type syncHistoryMsg struct {
+	messages []*pb.ConversationMessage
+	err      error
+}
+
+// syncStateMsg carries updated session state back to the model.
+type syncStateMsg struct {
+	state *pb.GetStateResponse
+	err   error
+}
+
+// errorMsg carries an error back to the model.
+type errorMsg struct {
+	err error
+}
+
+// sessionSwitchMsg carries a new session ID back to the model.
+type sessionSwitchMsg struct {
+	sessionID  string
+	initialMsg *historyEntry
+}
+
+// compactDoneMsg is sent when the manual compaction RPC completes.
+type compactDoneMsg struct {
+	err error
+}

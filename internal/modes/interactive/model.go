@@ -95,7 +95,6 @@ func newModel(modelName, provider, thinking string, contextWindow int, client pb
 		style:         style,
 	}
 
-	m.syncPromptHistory()
 	m.newContext()
 	if initialInput != "" {
 		m.updatePicker()

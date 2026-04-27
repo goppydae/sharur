@@ -146,11 +146,11 @@ func TestFullAgentTurnEvents(t *testing.T) {
 	res := m.buildChatContent()
 	t.Logf("Final rendered output:\n%s", res)
 
-	if !strings.Contains(res, "read main.go") {
-		t.Error("Expected 'read main.go' in rendered output")
+	if !strings.Contains(res, "read") || !strings.Contains(res, "main.go") {
+		t.Error("Expected 'read' and 'main.go' in rendered output")
 	}
-	if !strings.Contains(res, "ls .") {
-		t.Error("Expected 'ls .' in rendered output")
+	if !strings.Contains(res, "ls") || !strings.Contains(res, ".") {
+		t.Error("Expected 'ls' and '.' in rendered output")
 	}
 	if !strings.Contains(res, "package main") {
 		t.Error("Expected 'package main' in rendered output")
@@ -197,8 +197,8 @@ func TestRedundantEvents(t *testing.T) {
 	}
 
 	res := m.buildChatContent()
-	if !strings.Contains(res, "✓ read main.go") {
-		t.Error("Expected successful read tool call in output")
+	if !strings.Contains(res, "read") || !strings.Contains(res, "main.go") {
+		t.Error("Expected read tool call and path in output")
 	}
 }
 

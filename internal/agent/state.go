@@ -52,4 +52,5 @@ type AgentState struct {
 		ReserveTokens    int  `json:"reserveTokens"`
 		KeepRecentTokens int  `json:"keepRecentTokens"`
 	} `json:"compaction"`
+	LatestCompaction *types.CompactionState `json:"latestCompaction,omitempty"`
 }

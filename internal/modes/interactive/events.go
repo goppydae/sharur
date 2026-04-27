@@ -11,10 +11,29 @@ import (
 	pb "github.com/goppydae/gollm/internal/gen/gollm/v1"
 )
 
-func (m *model) handleAgentEvent(ev *pb.AgentEvent) (tea.Model, tea.Cmd) {
+func (m *model) handleAgentEvent(ev *pb.AgentEvent) tea.Cmd {
 	var cmds []tea.Cmd
 
 	switch p := ev.Payload.(type) {
+	case *pb.AgentEvent_CompactStart:
+		_ = p
+		m.isCompacting.Store(true)
+		cmds = append(cmds, m.spinner.Tick)
+		cmds = append(cmds, m.stopwatch.Reset())
+		cmds = append(cmds, m.stopwatch.Start())
+
+	case *pb.AgentEvent_CompactEnd:
+		_ = p
+		m.isCompacting.Store(false)
+		if !m.isRunning {
+			cmds = append(cmds, m.stopwatch.Stop())
+		}
+		cmds = append(cmds, m.syncHistoryCmd())
+		cmds = append(cmds, m.syncStateCmd())
+
+	case *pb.AgentEvent_QueueUpdate:
+		_ = p
+		cmds = append(cmds, m.syncStateCmd())
 	case *pb.AgentEvent_AgentStart:
 		_ = p
 		m.isRunning = true
@@ -54,7 +73,7 @@ func (m *model) handleAgentEvent(ev *pb.AgentEvent) (tea.Model, tea.Cmd) {
 		}
 		if !duplicate {
 			entry := m.ensureAssistantEntry()
-			arg := extractFirstArgument(tc.ArgsJson)
+			arg := extractFirstArgument(tc.Name, tc.ArgsJson)
 			entry.items = append(entry.items, contentItem{
 				kind: contentItemToolCall,
 				tc: toolCallEntry{
@@ -149,13 +168,6 @@ func (m *model) handleAgentEvent(ev *pb.AgentEvent) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.stopwatch.Start())
 		}
 
-	case *pb.AgentEvent_QueueUpdate:
-		_ = p
-		// Fetch updated queue counts from the service.
-		if state, err := m.client.GetState(context.Background(), &pb.GetStateRequest{SessionId: m.sessionID}); err == nil {
-			_ = state // queue counts not yet in GetStateResponse; extend proto if needed
-		}
-
 	case *pb.AgentEvent_AgentEnd:
 		_ = p
 		m.isRunning = false
@@ -176,70 +188,56 @@ func (m *model) handleAgentEvent(ev *pb.AgentEvent) (tea.Model, tea.Cmd) {
 
 	case *pb.AgentEvent_Tokens:
 		m.tokens = int(p.Tokens.Value)
-
-	case *pb.AgentEvent_CompactStart:
-		m.isCompacting.Store(true)
-		cmds = append(cmds, m.spinner.Tick)
-		cmds = append(cmds, m.stopwatch.Reset())
-		cmds = append(cmds, m.stopwatch.Start())
-		if p.CompactStart.Message != "" {
-			m.history = append(m.history, historyEntry{
-				role:  "info",
-				items: []contentItem{{kind: contentItemText, text: p.CompactStart.Message}},
-			})
-		}
-
-	case *pb.AgentEvent_CompactEnd:
-		_ = p
-		m.isCompacting.Store(false)
-		if !m.isRunning {
-			cmds = append(cmds, m.stopwatch.Stop())
-		}
-		m.syncHistoryFromService()
-		m.history = append(m.history, historyEntry{
-			role:  "success",
-			items: []contentItem{{kind: contentItemText, text: "Context compacted."}},
-		})
 	}
 
-	m.chatContent = m.buildChatContent()
-	m.vp.SetContent(m.chatContent)
-	if !m.userScrolled {
-		m.vp.GotoBottom()
-	}
-
-	cmds = append(cmds, listenForEvent(m.eventCh))
-	return m, tea.Batch(cmds...)
+	m.refreshViewport()
+	return tea.Batch(cmds...)
 }
 
-// syncHistoryFromService rebuilds the TUI history from the gRPC service.
-func (m *model) syncHistoryFromService() {
+// syncHistoryCmd returns a command to fetch the latest conversation history.
+func (m *model) syncHistoryCmd() tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.client.GetMessages(context.Background(), &pb.GetMessagesRequest{SessionId: m.sessionID})
+		if err != nil {
+			return syncHistoryMsg{err: err}
+		}
+		return syncHistoryMsg{messages: resp.Messages}
+	}
+}
+
+// syncStateCmd returns a command to fetch the latest session state (model, thinking level, etc.).
+func (m *model) syncStateCmd() tea.Cmd {
+	return func() tea.Msg {
+		state, err := m.client.GetState(context.Background(), &pb.GetStateRequest{SessionId: m.sessionID})
+		if err != nil {
+			return syncStateMsg{err: err}
+		}
+		return syncStateMsg{state: state}
+	}
+}
+
+// compactCmd returns a command to trigger a context compaction.
+func (m *model) compactCmd() tea.Cmd {
+	return func() tea.Msg {
+		_, err := m.client.Compact(context.Background(), &pb.CompactRequest{SessionId: m.sessionID})
+		return compactDoneMsg{err: err}
+	}
+}
+
+// applyHistorySync updates the model with freshly fetched messages.
+func (m *model) applyHistorySync(msgs []*pb.ConversationMessage) {
 	var trailingMeta []historyEntry
 	for i := len(m.history) - 1; i >= 0; i-- {
 		entry := m.history[i]
-		if m.isRunning && entry.role == "assistant" {
+		// Preserve trailing assistant messages if running, or any notice boxes
+		isNotice := entry.role == "info" || entry.role == "success" || entry.role == "warning" || entry.role == "error" || entry.role == "system"
+		if (m.isRunning && entry.role == "assistant") || isNotice {
 			trailingMeta = append([]historyEntry{entry}, trailingMeta...)
 			continue
 		}
-		isNotice := entry.role == "error" || entry.role == "info" || entry.role == "warning" || entry.role == "success"
-		content := ""
-		if len(entry.items) > 0 {
-			content = entry.items[0].text
-		}
-		isCompactionNotice := strings.Contains(content, "Compacting") || strings.Contains(content, "Context compacted")
-		if isNotice && !isCompactionNotice {
-			trailingMeta = append([]historyEntry{entry}, trailingMeta...)
-		} else {
-			break
-		}
+		break
 	}
 
-	resp, err := m.client.GetMessages(context.Background(), &pb.GetMessagesRequest{SessionId: m.sessionID})
-	if err != nil {
-		return
-	}
-
-	msgs := resp.Messages
 	m.history = make([]historyEntry, 0, len(msgs)+len(trailingMeta))
 
 	for _, msg := range msgs {
@@ -287,7 +285,7 @@ func (m *model) syncHistoryFromService() {
 				entry.items = append(entry.items, contentItem{kind: contentItemText, text: msg.Content})
 			}
 			for _, tc := range msg.ToolCalls {
-				arg := extractFirstArgument(tc.ArgsJson)
+				arg := extractFirstArgument(tc.Name, tc.ArgsJson)
 				entry.items = append(entry.items, contentItem{
 					kind: contentItemToolCall,
 					tc: toolCallEntry{
@@ -307,35 +305,37 @@ func (m *model) syncHistoryFromService() {
 	m.history = append(m.history, trailingMeta...)
 	m.newAssistantEntry = true
 
-	// Refresh token count and model info from state.
-	if state, err := m.client.GetState(context.Background(), &pb.GetStateRequest{SessionId: m.sessionID}); err == nil {
-		m.modelName = state.Model
-		m.provider = state.Provider
-		m.thinking = state.ThinkingLevel
-		if state.ProviderInfo != nil {
-			m.contextWindow = int(state.ProviderInfo.ContextWindow)
-		}
-	}
-
-	m.syncPromptHistory()
-	m.chatContent = m.buildChatContent()
-	m.vp.SetContent(m.chatContent)
-	if !m.userScrolled {
-		m.vp.GotoBottom()
-	}
+	m.updatePromptHistory(msgs)
+	m.refreshViewport()
 }
 
-func (m *model) syncPromptHistory() {
-	if m.client == nil {
-		return
-	}
+// syncHistoryFromService remains as a synchronous helper for initial startup or simple cases,
+// but should be avoided in the main loop to prevent UI freezes.
+func (m *model) syncHistoryFromService() {
 	resp, err := m.client.GetMessages(context.Background(), &pb.GetMessagesRequest{SessionId: m.sessionID})
 	if err != nil {
 		return
 	}
+	m.applyHistorySync(resp.Messages)
+
+	if state, err := m.client.GetState(context.Background(), &pb.GetStateRequest{SessionId: m.sessionID}); err == nil {
+		m.applyStateSync(state)
+	}
+}
+
+func (m *model) applyStateSync(state *pb.GetStateResponse) {
+	m.modelName = state.Model
+	m.provider = state.Provider
+	m.thinking = state.ThinkingLevel
+	if state.ProviderInfo != nil {
+		m.contextWindow = int(state.ProviderInfo.ContextWindow)
+	}
+}
+
+func (m *model) updatePromptHistory(msgs []*pb.ConversationMessage) {
 	m.promptHistory = make([]string, 0)
 	seen := make(map[string]bool)
-	for _, msg := range resp.Messages {
+	for _, msg := range msgs {
 		if msg.Role == "user" && msg.Content != "" && msg.Content != "Continue" {
 			if !seen[msg.Content] {
 				m.promptHistory = append(m.promptHistory, msg.Content)
@@ -372,8 +372,9 @@ func listenForEvent(eventCh <-chan *pb.AgentEvent) tea.Cmd {
 	}
 }
 
-// extractFirstArgument pulls the first string value from a JSON object or raw string.
-func extractFirstArgument(argsJSON string) string {
+// extractFirstArgument pulls a summary of the tool arguments. For most tools, it's the first
+// string value. For tools like write/edit, it includes multiple relevant fields.
+func extractFirstArgument(toolName, argsJSON string) string {
 	if argsJSON == "" {
 		return ""
 	}
@@ -381,12 +382,60 @@ func extractFirstArgument(argsJSON string) string {
 	if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
 		return argsJSON
 	}
+
+	// Special handling for write/edit to show both path and content
+	if toolName == "write" || toolName == "edit" || toolName == "read" {
+		var path, content string
+		if v, ok := m["path"]; ok {
+			_ = json.Unmarshal(v, &path)
+		}
+		if v, ok := m["content"]; ok {
+			_ = json.Unmarshal(v, &content)
+		}
+		if v, ok := m["replacement"]; ok && content == "" {
+			_ = json.Unmarshal(v, &content)
+		}
+
+		if path != "" && content != "" {
+			return path + "\n" + content
+		}
+		if path != "" {
+			return path
+		}
+		if content != "" {
+			return content
+		}
+	}
+
+	// Prioritize common "identifier" fields
+	priority := []string{"path", "filename", "id", "cmd", "command", "name", "url", "query"}
+	for _, key := range priority {
+		if v, ok := m[key]; ok {
+			var s string
+			if err := json.Unmarshal(v, &s); err == nil {
+				return s
+			}
+		}
+	}
+
+	// Fallback to first string field that isn't too long
+	for _, v := range m {
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil {
+			if len(s) < 100 {
+				return s
+			}
+		}
+	}
+
+	// Last resort: just pick something
 	for _, v := range m {
 		var s string
 		if err := json.Unmarshal(v, &s); err == nil {
 			return s
 		}
 	}
+
 	return argsJSON
 }
 

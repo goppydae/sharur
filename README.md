@@ -78,8 +78,10 @@ A rich, Bubble Tea-powered TUI with real-time streaming, tool cards, session man
 |---|---|
 | `/new` | Start a fresh session |
 | `/resume <id>` | Resume a session by ID (supports fuzzy search) |
-| `/fork` | Branch current session into a new child |
-| `/clone` | Duplicate current session (no parent link) |
+| `/branch [msg#]` | Create a new child session branching from a specific message index (defaults to last) |
+| `/fork` | Duplicate current session into a new independent session |
+| `/rebase` | Interactive rebase: select a message to rewrite or branch from |
+| `/merge <id>` | Merge another session's history into the current one |
 | `/tree` | Open session tree — navigate, resume, or branch |
 | `/import <path>` | Import a session from a JSONL file |
 | `/export <path>` | Export the current session to a JSONL file |
@@ -166,7 +168,7 @@ Sessions are stored as JSONL files in a project-aware directory structure:
     2026-04-23T09-12-11_{uuid}.jsonl
 ```
 
-Each session tracks full message history, model, provider, thinking level, system prompt, and parent session ID (for branching). The `/tree` command visualizes the complete session hierarchy with box-drawing characters.
+Each session tracks full message history, model, provider, thinking level, system prompt, and parent session ID (for branching). The `/tree` command visualizes the complete session hierarchy with box-drawing characters, while `/rebase` and `/merge` allow for sophisticated history manipulation.
 
 ---
 

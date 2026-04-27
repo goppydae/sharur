@@ -4,11 +4,27 @@ import (
 	"fmt"
 	"image/color"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	glamour "charm.land/glamour/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
+
+// hexToTrueColorBg converts a "#rrggbb" hex color to an ANSI true-color
+// background escape sequence (\x1b[48;2;R;G;Bm).
+func hexToTrueColorBg(hex string) string {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return "\x1b[48;2;45;45;45m" // fallback: #2d2d2d
+	}
+	r, _ := strconv.ParseUint(hex[0:2], 16, 8)
+	g, _ := strconv.ParseUint(hex[2:4], 16, 8)
+	b, _ := strconv.ParseUint(hex[4:6], 16, 8)
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+}
 
 var skillRegex = regexp.MustCompile(`(?s)<skill name="([^"]+)" location="([^"]+)">\n(.*?)\n<\/skill>(.*)`)
 var fileRegex = regexp.MustCompile(`(?s)<file path="([^"]+)">\n(.*?)\n<\/file>(.*)`)
@@ -94,8 +110,168 @@ func (m *model) buildChatContent() string {
 		if isCompacting {
 			status = "Compacting..."
 		}
-		elapsed := m.stopwatch.Elapsed().String()
+		elapsed := m.stopwatch.View()
 		lines = append(lines, m.style.WorkingIndicator().PaddingLeft(1).Render(m.spinner.View()+" "+status+" "+elapsed))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+var (
+	mdRenderer      *glamour.TermRenderer
+	mdCachedWidth   int
+	mdCachedBg      string
+	mdCachedCodeBg  string
+	mdMu            sync.Mutex
+)
+
+func renderMarkdown(content string, width int, bgHex, codeBgHex string) string {
+	mdMu.Lock()
+	defer mdMu.Unlock()
+
+	if mdRenderer == nil || mdCachedWidth != width || mdCachedBg != bgHex || mdCachedCodeBg != codeBgHex {
+		chromaBg := fmt.Sprintf(`{"background_color": "%s"}`, codeBgHex)
+		styleJSON := fmt.Sprintf(`{
+		"document": {"background_color": "%s", "margin": 0},
+		"code_block": {
+			"background_color": "%s",
+			"margin": 0,
+			"padding": 1,
+			"chroma": {
+				"text":                  `+chromaBg+`,
+				"error":                 `+chromaBg+`,
+				"comment":               `+chromaBg+`,
+				"comment_preproc":       `+chromaBg+`,
+				"keyword":               `+chromaBg+`,
+				"keyword_reserved":      `+chromaBg+`,
+				"keyword_namespace":     `+chromaBg+`,
+				"keyword_type":          `+chromaBg+`,
+				"operator":              `+chromaBg+`,
+				"punctuation":           `+chromaBg+`,
+				"name":                  `+chromaBg+`,
+				"name_builtin":          `+chromaBg+`,
+				"name_tag":              `+chromaBg+`,
+				"name_attribute":        `+chromaBg+`,
+				"name_class":            `+chromaBg+`,
+				"name_constant":         `+chromaBg+`,
+				"name_decorator":        `+chromaBg+`,
+				"name_exception":        `+chromaBg+`,
+				"name_function":         `+chromaBg+`,
+				"name_other":            `+chromaBg+`,
+				"literal":               `+chromaBg+`,
+				"literal_number":        `+chromaBg+`,
+				"literal_date":          `+chromaBg+`,
+				"literal_string":        `+chromaBg+`,
+				"literal_string_escape": `+chromaBg+`,
+				"generic_deleted":       `+chromaBg+`,
+				"generic_emph":          `+chromaBg+`,
+				"generic_inserted":      `+chromaBg+`,
+				"generic_strong":        `+chromaBg+`,
+				"generic_subheading":    `+chromaBg+`,
+				"background":            `+chromaBg+`
+			}
+		},
+		"code": {
+			"background_color": "%s"
+		}
+	}`, bgHex, codeBgHex, codeBgHex)
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(0),
+			glamour.WithStylesFromJSONBytes([]byte(styleJSON)),
+			glamour.WithChromaFormatter("terminal16m"),
+		)
+		if err != nil {
+			return content
+		}
+		mdRenderer = r
+		mdCachedWidth = width
+		mdCachedBg = bgHex
+		mdCachedCodeBg = codeBgHex
+	}
+
+	out, err := mdRenderer.Render(content)
+	if err != nil {
+		return content
+	}
+
+	return strings.TrimSpace(fixCodeBlockLines(out, codeBgHex))
+}
+
+// fixCodeBlockLines finds groups of Chroma-rendered code-block lines
+// (identified by the true-colour bg escape for codeBgHex), strips all ANSI
+// reset sequences so the background stays active, and pads every line in
+// the group — including blank source lines — to the width of the longest
+// line. This makes the code-block background a solid, uniform rectangle.
+//
+// With glamour's WordWrap disabled (0), the PaddingWriter adds no
+// document-background suffix spaces, so the only resets in code-block
+// lines are Chroma's own \x1b[0m and IndentWriter's \x1b[m; both are
+// stripped here before measuring and padding.
+func fixCodeBlockLines(rendered, codeBgHex string) string {
+	bgANSI := hexToTrueColorBg(codeBgHex)
+	const reset = "\x1b[0m"
+	const resetShort = "\x1b[m"
+
+	stripResets := func(s string) string {
+		s = strings.ReplaceAll(s, reset, "")
+		s = strings.ReplaceAll(s, resetShort, "")
+		return s
+	}
+
+	lines := strings.Split(rendered, "\n")
+
+	for i := 0; i < len(lines); {
+		if !strings.Contains(lines[i], bgANSI) {
+			i++
+			continue
+		}
+
+		// Collect contiguous code-block lines plus any intervening blank
+		// lines (visible width 0) that sit between bgANSI lines.
+		start := i
+		i++
+		for i < len(lines) {
+			if strings.Contains(lines[i], bgANSI) {
+				i++
+				continue
+			}
+			// Include visually empty lines that are sandwiched between
+			// code-block lines (e.g. blank source lines without explicit bg).
+			if lipgloss.Width(lines[i]) == 0 && i+1 < len(lines) && strings.Contains(lines[i+1], bgANSI) {
+				i++
+				continue
+			}
+			break
+		}
+		end := i
+
+		// Strip all resets; terminal16m re-emits full fg+bg per token so
+		// there is no colour bleed between tokens after stripping.
+		stripped := make([]string, end-start)
+		maxW := 0
+		for j, line := range lines[start:end] {
+			s := stripResets(line)
+			stripped[j] = s
+			if w := lipgloss.Width(s); w > maxW {
+				maxW = w
+			}
+		}
+
+		// Pad every line to maxW. Spaces appended after the last Chroma
+		// fg+bg sequence inherit the #2d2d2d background automatically.
+		// Blank lines get an explicit bgANSI prefix so the inherited bg is
+		// always the code background.
+		for j, s := range stripped {
+			if !strings.Contains(s, bgANSI) {
+				s = bgANSI + s
+			}
+			pad := maxW - lipgloss.Width(s)
+			if pad < 0 {
+				pad = 0
+			}
+			lines[start+j] = s + strings.Repeat(" ", pad) + reset
+		}
 	}
 
 	return strings.Join(lines, "\n")
@@ -153,9 +329,18 @@ func renderToolCall(tc toolCallEntry, output string, chatW int, s Style, expande
 	if tc.status == toolCallSuccess { icon = "✓" }
 	if tc.status == toolCallFailure { icon = "✗" }
 
+	argLines := strings.Split(tc.arg, "\n")
 	header := icon + " " + tc.name
-	if tc.arg != "" { header += " " + tc.arg }
+	if len(argLines) > 0 && argLines[0] != "" {
+		header += " " + argLines[0]
+	}
 	rawLines = append(rawLines, s.ToolCall().Bold(true).Background(bgColor).Render(header))
+
+	if len(argLines) > 1 {
+		for _, l := range argLines[1:] {
+			rawLines = append(rawLines, s.Muted().Background(bgColor).Render(l))
+		}
+	}
 
 	if output == "" {
 		output = tc.streamingOutput
@@ -256,7 +441,8 @@ func renderEntry(e historyEntry, s Style, chatW int, toolCallsExpanded bool) str
 				}
 				rendered = wrapAndRightAlign(item.text, chatW, msgW, s.UserBox())
 			case "assistant":
-				rendered = wrapAndLeftAlign(item.text, chatW, msgW, s.AssistantBox())
+				bgHex := s.AssistantBgHex()
+				rendered = wrapAndLeftAlign(renderMarkdown(item.text, msgW-4, bgHex, s.CodeBgHex()), chatW, msgW, s.AssistantBox())
 			case "error", "warning", "info", "success", "system":
 				noticeStyle := s.NoticeBox(e.role).MarginBottom(0)
 				text := Capitalize(item.text)
@@ -269,7 +455,8 @@ func renderEntry(e historyEntry, s Style, chatW int, toolCallsExpanded bool) str
 				blank := noticeStyle.Width(chatW).Render("")
 				rendered = blank + "\n" + strings.Join(noticeLines, "\n") + "\n" + blank
 			default:
-				rendered = wrapAndLeftAlign(item.text, chatW, msgW, s.AssistantBox())
+				bgHex := s.AssistantBgHex()
+				rendered = wrapAndLeftAlign(renderMarkdown(item.text, msgW-4, bgHex, s.CodeBgHex()), chatW, msgW, s.AssistantBox())
 			}
 			parts = append(parts, rendered)
 
@@ -309,7 +496,11 @@ func renderFooter(m *model) string {
 	if m.isRunning || isCompacting {
 		leftParts = append(leftParts, m.stopwatch.View())
 	}
-	leftParts = append(leftParts, m.style.Dim().Render("│ "+m.thinking))
+	if m.thinking != "" && m.thinking != "none" {
+		leftParts = append(leftParts, m.style.Dim().Render("│"))
+		leftParts = append(leftParts, m.style.Dim().Render(m.thinking))
+	}
+	leftParts = append(leftParts, m.style.Dim().Render("│"))
 	leftParts = append(leftParts, m.style.Muted().Render(m.provider+"/"+m.modelName))
 
 	// Queue display

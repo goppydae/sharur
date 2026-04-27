@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
@@ -51,6 +52,7 @@ type Theme struct {
 	// Message backgrounds
 	UserMsgBg    AdaptiveColor `json:"userMsgBg" yaml:"userMsgBg"`
 	AssistantBg  AdaptiveColor `json:"assistantBg" yaml:"assistantBg"`
+	CodeBg       AdaptiveColor `json:"codeBg" yaml:"codeBg"`
 	ErrorBg       AdaptiveColor `json:"errorBg" yaml:"errorBg"`
 	WarningBg     AdaptiveColor `json:"warningBg" yaml:"warningBg"`
 	InfoBg        AdaptiveColor `json:"infoBg" yaml:"infoBg"`
@@ -149,6 +151,34 @@ func (s Style) AssistantBox() lipgloss.Style {
 	}
 
 	return style
+}
+
+var (
+	isDark     bool
+	isDarkOnce sync.Once
+)
+
+func (s Style) AssistantBgHex() string {
+	isDarkOnce.Do(func() {
+		isDark = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+	})
+	if isDark {
+		return s.theme.AssistantBg.Dark
+	}
+	return s.theme.AssistantBg.Light
+}
+
+func (s Style) CodeBgHex() string {
+	isDarkOnce.Do(func() {
+		isDark = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+	})
+	if s.theme.CodeBg.Dark != "" {
+		if isDark {
+			return s.theme.CodeBg.Dark
+		}
+		return s.theme.CodeBg.Light
+	}
+	return "#2d2d2d"
 }
 
 func (s Style) NoticeBox(level string) lipgloss.Style {
@@ -295,6 +325,26 @@ func (s Style) MutedColor() color.Color {
 
 func (s Style) MutedTextColor() color.Color {
 	return s.theme.MutedText.Color()
+}
+
+func (s Style) SuccessColor() color.Color {
+	return s.theme.Success.Color()
+}
+
+func (s Style) ErrorColor() color.Color {
+	return s.theme.Error.Color()
+}
+
+func (s Style) WarningColor() color.Color {
+	return s.theme.Warning.Color()
+}
+
+func (s Style) InfoColor() color.Color {
+	return s.theme.Info.Color()
+}
+
+func (s Style) WorkingColor() color.Color {
+	return s.theme.WorkingColor.Color()
 }
 
 // PanelBgColor returns the background color for panel-style elements (modals, etc.).

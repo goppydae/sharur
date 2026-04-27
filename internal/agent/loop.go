@@ -109,9 +109,7 @@ func (a *Agent) runTurn(ctx context.Context) {
 			})
 		}
 		assistantMsg.Timestamp = time.Now()
-		a.mu.Lock()
-		a.state.Messages = append(a.state.Messages, assistantMsg)
-		a.mu.Unlock()
+		a.appendMessage(assistantMsg)
 
 		if len(llmCalls) == 0 {
 			// Check queues again. If anything was added during stream, start new turn.
@@ -149,9 +147,7 @@ func (a *Agent) drainQueues() bool {
 	msgs := append(steer, followUp...)
 	for _, msg := range msgs {
 		a.events.Publish(Event{Type: EventMessageStart})
-		a.mu.Lock()
-		a.state.Messages = append(a.state.Messages, msg)
-		a.mu.Unlock()
+		a.appendMessage(msg)
 		a.events.Publish(Event{Type: EventMessageEnd})
 	}
 
@@ -163,9 +159,7 @@ func (a *Agent) buildRequest() *llm.CompletionRequest {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	msgs := make([]types.Message, len(a.state.Messages))
-	copy(msgs, a.state.Messages)
-
+	msgs := a.buildLlmMessagesNoLock()
 	req := &llm.CompletionRequest{
 		Model:       a.state.Model,
 		Messages:    msgs,
@@ -328,14 +322,12 @@ func (a *Agent) runToolCalls(ctx context.Context, toolCalls []*llm.ToolCall) boo
 			},
 		})
 
-		a.mu.Lock()
-		a.state.Messages = append(a.state.Messages, types.Message{
+		a.appendMessage(types.Message{
 			Role:       "tool",
 			Content:    content,
 			ToolCallID: tc.ID,
 			Timestamp:  time.Now(),
 		})
-		a.mu.Unlock()
 	}
 	return true
 }

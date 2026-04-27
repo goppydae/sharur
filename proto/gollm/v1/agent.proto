@@ -47,11 +47,17 @@ service AgentService {
   // Compact triggers manual context compaction.
   rpc Compact(CompactRequest) returns (CompactResponse);
 
-  // ForkSession creates a new session branched from an existing one.
+  // BranchSession creates a new child session from an existing one at an optional message pivot.
+  rpc BranchSession(BranchSessionRequest) returns (NewSessionResponse);
+
+  // ForkSession duplicates an existing session into a new independent root (no parent link).
   rpc ForkSession(ForkSessionRequest) returns (NewSessionResponse);
 
-  // CloneSession duplicates an existing session into a new independent one.
-  rpc CloneSession(CloneSessionRequest) returns (NewSessionResponse);
+  // RebaseSession creates a fresh-root session from a user-selected subset of messages.
+  rpc RebaseSession(RebaseSessionRequest) returns (NewSessionResponse);
+
+  // MergeSession synthesizes two branches into a new session via LLM.
+  rpc MergeSession(MergeSessionRequest) returns (NewSessionResponse);
 
   // GetSessionTree returns the hierarchical tree of sessions.
   rpc GetSessionTree(GetSessionTreeRequest) returns (GetSessionTreeResponse);
@@ -103,9 +109,28 @@ message SetModelRequest         { string session_id = 1; string model = 2; }
 message SetThinkingLevelRequest { string session_id = 1; string thinking_level = 2; }
 message SetSessionNameRequest   { string session_id = 1; string name = 2; }
 message CompactRequest          { string session_id = 1; }
-message ForkSessionRequest       { string session_id = 1; }
-message CloneSessionRequest      { string session_id = 1; }
-message GetSessionTreeRequest    {}
+message BranchSessionRequest {
+  string session_id    = 1;
+  int32  message_index = 2;  // -1 = branch at current end (all messages)
+  string target_id     = 3;  // record ID to branch from (overrides message_index if set)
+}
+
+message ForkSessionRequest { string session_id = 1; }
+
+message RebaseSessionRequest {
+  string         session_id  = 1;
+  repeated int32 msg_indices = 2;  // message indices to keep (in order)
+  bool           squash      = 3;  // if true, LLM condenses selected msgs before saving
+}
+
+message MergeSessionRequest {
+  string session_id_a = 1;  // primary parent
+  string session_id_b = 2;  // secondary (merge source)
+}
+message GetSessionTreeRequest {
+  string session_id = 1;
+  bool   global     = 2;
+}
 message FollowUpRequest {
   string session_id = 1;
   string message    = 2;
@@ -123,9 +148,14 @@ message SessionNode {
   string session_id = 1;
   string name       = 2;
   repeated SessionNode children = 3;
-  string first_message = 4;
-  int64  created_at    = 5;
-  int64  updated_at    = 6;
+  string first_message         = 4;
+  int64  created_at            = 5;
+  int64  updated_at            = 6;
+  int32  parent_message_index  = 7;  // -1 if not a mid-branch pivot
+  string merge_source_id       = 8;  // non-empty on merge nodes
+  string role                  = 9;
+  string content               = 10;
+  bool   is_active             = 11;
 }
 
 // ── Responses ─────────────────────────────────────────────────────────────────
@@ -164,6 +194,10 @@ message GetStateResponse {
   bool   dry_run        = 8;
   CompactionConfig compaction = 9;
   ProviderInfo provider_info = 10;
+  // Lineage (informational only)
+  string rebased_from        = 11;
+  string merge_source_id     = 12;
+  int32  parent_message_index = 13;  // -1 if N/A
 }
 
 message ProviderInfo {

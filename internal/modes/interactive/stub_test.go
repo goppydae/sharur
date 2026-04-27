@@ -50,11 +50,17 @@ func (s *stubClient) SetSessionName(ctx context.Context, in *pb.SetSessionNameRe
 func (s *stubClient) Compact(ctx context.Context, in *pb.CompactRequest, opts ...grpc.CallOption) (*pb.CompactResponse, error) {
 	return &pb.CompactResponse{Ok: true}, nil
 }
+func (s *stubClient) BranchSession(ctx context.Context, in *pb.BranchSessionRequest, opts ...grpc.CallOption) (*pb.NewSessionResponse, error) {
+	return &pb.NewSessionResponse{SessionId: "branch-session"}, nil
+}
 func (s *stubClient) ForkSession(ctx context.Context, in *pb.ForkSessionRequest, opts ...grpc.CallOption) (*pb.NewSessionResponse, error) {
 	return &pb.NewSessionResponse{SessionId: "fork-session"}, nil
 }
-func (s *stubClient) CloneSession(ctx context.Context, in *pb.CloneSessionRequest, opts ...grpc.CallOption) (*pb.NewSessionResponse, error) {
-	return &pb.NewSessionResponse{SessionId: "clone-session"}, nil
+func (s *stubClient) RebaseSession(ctx context.Context, in *pb.RebaseSessionRequest, opts ...grpc.CallOption) (*pb.NewSessionResponse, error) {
+	return &pb.NewSessionResponse{SessionId: "rebase-session"}, nil
+}
+func (s *stubClient) MergeSession(ctx context.Context, in *pb.MergeSessionRequest, opts ...grpc.CallOption) (*pb.NewSessionResponse, error) {
+	return &pb.NewSessionResponse{SessionId: "merge-session"}, nil
 }
 func (s *stubClient) GetSessionTree(ctx context.Context, in *pb.GetSessionTreeRequest, opts ...grpc.CallOption) (*pb.GetSessionTreeResponse, error) {
 	return &pb.GetSessionTreeResponse{}, nil

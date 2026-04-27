@@ -18,11 +18,21 @@ type TreeNode struct {
 	MsgCount     int
 	FirstMessage string
 	Children     []*TreeNode
+
+	// Conversation-based fields
+	Role     string
+	Content  string
+	IsActive bool
+
+	// Lineage metadata (display only — not tree topology)
+	ParentMessageIndex *int
+	MergeSourceID      *string
+	RebasedFrom        *string
 }
 
 // BuildTree loads all sessions and returns the roots of a session tree.
-// Orphaned nodes (whose parentID is not found) are treated as roots.
-func (m *Manager) BuildTree() ([]*TreeNode, error) {
+// If global is false, it only returns the tree containing currentID.
+func (m *Manager) BuildTree(currentID string, global bool) ([]*TreeNode, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -31,25 +41,80 @@ func (m *Manager) BuildTree() ([]*TreeNode, error) {
 		return nil, err
 	}
 
-	byID := make(map[string]*TreeNode, len(ids))
-	for _, id := range ids {
-		sum, err := m.store.readSummary(id)
+	byID := make(map[string]*TreeNode)
+	
+	for _, fileID := range ids {
+		records, err := m.store.read(fileID)
 		if err != nil {
 			continue
 		}
-		// Normalize ID for mapping
-		normID := strings.TrimSpace(strings.ToLower(id))
-		byID[normID] = &TreeNode{
-			ID:           sum.ID,
-			ParentID:     sum.ParentID,
-			Name:         sum.Name,
-			FirstMessage: sum.FirstMessage,
-			CreatedAt:    sum.CreatedAt,
-			UpdatedAt:    sum.UpdatedAt,
+
+		for _, r := range records {
+			if r.ID == "" {
+				continue
+			}
+
+			normID := strings.TrimSpace(strings.ToLower(r.ID))
+			node, ok := byID[normID]
+			if !ok {
+				node = &TreeNode{
+					ID:       r.ID,
+					ParentID: r.ParentID,
+				}
+				byID[normID] = node
+			}
+
+			if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
+				if node.CreatedAt.IsZero() || t.Before(node.CreatedAt) {
+					node.CreatedAt = t
+				}
+				if t.After(node.UpdatedAt) {
+					node.UpdatedAt = t
+				}
+			}
+
+			switch r.Type {
+			case TypeSession:
+				if node.Name == "" {
+					node.Name = r.ID[:8]
+				}
+				node.Role = "session"
+				// Map the fileID to this node as well, so we can find it by filename.
+				byID[strings.TrimSpace(strings.ToLower(fileID))] = node
+			case TypeSessionInfo:
+				node.Name = r.Name
+				node.Role = "info"
+				node.Content = r.Name
+			case TypeMessage:
+				if r.Message != nil {
+					node.Role = r.Message.Role
+					node.Content = r.Message.Content
+					if node.FirstMessage == "" {
+						node.FirstMessage = r.Message.Content
+					}
+				}
+			case TypeModelChange:
+				node.Model = r.Model
+				node.Provider = r.Provider
+				node.Role = "model"
+				node.Content = r.Provider + "/" + r.Model
+			case TypeThinkingLevelChange:
+				node.Role = "thinking"
+				node.Content = r.ThinkingLevel
+			case TypeCompaction:
+				node.Role = "compaction"
+				node.Content = r.Summary
+			case TypeBranchSummary:
+				node.Role = "summary"
+				node.Content = r.Summary
+			case TypeLabel:
+				node.Role = "label"
+				node.Content = r.Label
+			}
 		}
 	}
 
-	// Also build a short-ID map for flexible matching (e.g. if parentId is short but ID is long)
+	// Short-ID map for flexible matching (≥8 char prefix of the actual UUID).
 	byShortID := make(map[string]*TreeNode)
 	for id, node := range byID {
 		if len(id) >= 8 {
@@ -58,13 +123,13 @@ func (m *Manager) BuildTree() ([]*TreeNode, error) {
 	}
 
 	// Link children
+	allNodes := make(map[*TreeNode]bool)
+	for _, n := range byID {
+		allNodes[n] = true
+	}
+
 	var roots []*TreeNode
-	for _, id := range ids {
-		normID := strings.TrimSpace(strings.ToLower(id))
-		n, ok := byID[normID]
-		if !ok {
-			continue
-		}
+	for n := range allNodes {
 		if n.ParentID != nil {
 			pid := strings.TrimSpace(strings.ToLower(*n.ParentID))
 			parent, ok := byID[pid]
@@ -75,34 +140,73 @@ func (m *Manager) BuildTree() ([]*TreeNode, error) {
 				parent.Children = append(parent.Children, n)
 				continue
 			}
-		} else if strings.HasPrefix(n.Name, "Fork of ") {
-			// Fallback for older sessions where ParentID wasn't persisted but name contains it
-			parts := strings.Fields(n.Name)
-			if len(parts) >= 3 {
-				pid := strings.TrimSpace(strings.ToLower(parts[2]))
-				if parent, ok := byShortID[pid]; ok {
-					parent.Children = append(parent.Children, n)
-					continue
-				}
-			}
 		}
 		roots = append(roots, n)
 	}
 
-	// Sort roots and children by UpdatedAt descending
-	sortNodes(roots)
+	// Filter to current session lineage if requested
+	if !global && currentID != "" {
+		root := findRoot(byID, byShortID, currentID)
+		if root != nil {
+			roots = []*TreeNode{root}
+		} else {
+			roots = nil
+		}
+	}
+
+	// Mark active node
+	currNode, ok := byID[strings.TrimSpace(strings.ToLower(currentID))]
+	if !ok && len(currentID) >= 8 {
+		currNode = byShortID[currentID[:8]]
+	}
+	if currNode != nil {
+		currNode.IsActive = true
+	}
+
+	// Sort roots by UpdatedAt descending (most recent first)
+	sort.Slice(roots, func(i, j int) bool {
+		return roots[i].UpdatedAt.After(roots[j].UpdatedAt)
+	})
+
+	// Sort children chronologically (ascending)
 	for _, n := range byID {
-		sortNodes(n.Children)
+		sort.Slice(n.Children, func(i, j int) bool {
+			return n.Children[i].UpdatedAt.Before(n.Children[j].UpdatedAt)
+		})
 	}
 
 	return roots, nil
 }
 
-func sortNodes(nodes []*TreeNode) {
-	sort.Slice(nodes, func(i, j int) bool {
-		return nodes[i].UpdatedAt.After(nodes[j].UpdatedAt)
-	})
+func findRoot(byID map[string]*TreeNode, byShortID map[string]*TreeNode, id string) *TreeNode {
+	curr := id
+	visited := make(map[string]bool)
+	var last *TreeNode
+	for curr != "" {
+		normID := strings.TrimSpace(strings.ToLower(curr))
+		if visited[normID] {
+			break
+		}
+		visited[normID] = true
+
+		n, ok := byID[normID]
+		if !ok && len(normID) >= 8 {
+			n, ok = byShortID[normID[:8]]
+		}
+
+		if !ok {
+			break
+		}
+		last = n
+		if n.ParentID != nil {
+			curr = *n.ParentID
+		} else {
+			curr = ""
+		}
+	}
+	return last
 }
+
 
 // GutterInfo tracks vertical branch lines for descendants.
 type GutterInfo struct {
@@ -125,49 +229,69 @@ func FlattenTree(roots []*TreeNode) []FlatNode {
 
 	multipleRoots := len(roots) > 1
 
-	var walk func(n *TreeNode, indent int, isLast bool, gutters []GutterInfo)
-	walk = func(n *TreeNode, indent int, isLast bool, gutters []GutterInfo) {
+	var walk func(n *TreeNode, indent int, justBranched bool, isLast bool, gutters []GutterInfo)
+	walk = func(n *TreeNode, indent int, justBranched bool, isLast bool, gutters []GutterInfo) {
+		// Pi-mono rule: show connector if parent branched or it's a virtual root child
+		showConnector := justBranched
+
 		result = append(result, FlatNode{
 			Node:          n,
 			Indent:        indent,
-			ShowConnector: indent > 0,
+			ShowConnector: showConnector,
 			IsLast:        isLast,
 			Gutters:       gutters,
 		})
 
 		children := n.Children
+		multipleChildren := len(children) > 1
+
+		// Calculate child indent following pi-mono rules:
+		// - If parent branches: children get +1
+		// - If it's the first generation after a branch: +1 for visual grouping
+		// - Otherwise: stay flat
+		childIndent := indent
+		if multipleChildren {
+			childIndent = indent + 1
+		} else if justBranched && indent > 0 {
+			childIndent = indent + 1
+		}
+
 		for i, child := range children {
 			childIsLast := i == len(children)-1
 			
-			// Build child gutters: inherit parent gutters and add a vertical line
-			// for this level if the child has siblings below it.
+			// Build child gutters
 			var childGutters []GutterInfo
 			if len(gutters) > 0 {
 				childGutters = make([]GutterInfo, len(gutters))
 				copy(childGutters, gutters)
 			}
 			
-			if !childIsLast {
-				// The vertical line should be at the same position as the child's connector.
-				pos := indent
-				childGutters = append(childGutters, GutterInfo{Position: pos, Show: true})
+			// If this node showed a connector, add a gutter for descendants
+			if showConnector {
+				// Connector is at displayIndent - 1. 
+				// We use a simplified version for gollm's FlatNode.
+				pos := indent - 1
+				if pos >= 0 {
+					childGutters = append(childGutters, GutterInfo{Position: pos, Show: !isLast})
+				}
 			}
 			
-			walk(child, indent+1, childIsLast, childGutters)
+			walk(child, childIndent, multipleChildren, childIsLast, childGutters)
 		}
 	}
 
 	for i, root := range roots {
 		indent := 0
-		var initialGutters []GutterInfo
 		if multipleRoots {
 			indent = 1
-			// Add a gutter for the virtual root to connect sibling roots
-			if i < len(roots)-1 {
-				initialGutters = []GutterInfo{{Position: 0, Show: true}}
-			}
 		}
-		walk(root, indent, i == len(roots)-1, initialGutters)
+		
+		var initialGutters []GutterInfo
+		if multipleRoots && i < len(roots)-1 {
+			initialGutters = []GutterInfo{{Position: 0, Show: true}}
+		}
+
+		walk(root, indent, multipleRoots, i == len(roots)-1, initialGutters)
 	}
 
 	return result

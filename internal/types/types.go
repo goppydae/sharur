@@ -20,6 +20,7 @@ const (
 
 // Message represents a single message in the conversation.
 type Message struct {
+	ID         string     `json:"id,omitempty"` // Record ID in session tree
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
 	Thinking   string     `json:"thinking,omitempty"`
@@ -59,6 +60,12 @@ type ToolInfo struct {
 	Schema      json.RawMessage `json:"inputSchema"`
 }
 
+// CompactionState stores the state of the latest context compaction.
+type CompactionState struct {
+	Summary          string `json:"summary"`
+	FirstKeptEntryID string `json:"firstKeptEntryId"`
+}
+
 // Session represents a conversation session.
 type Session struct {
 	ID         string          `json:"id"`
@@ -79,6 +86,9 @@ type Session struct {
 	CompactionEnabled   bool   `json:"compactionEnabled,omitempty"`
 	CompactionReserve   int    `json:"compactionReserveTokens,omitempty"`
 	CompactionKeep      int    `json:"compactionKeepRecentTokens,omitempty"`
+	ParentMessageIndex  *int   `json:"parentMessageIndex,omitempty"`
+	MergeSourceID       *string `json:"mergeSourceId,omitempty"`
+	LatestCompaction    *CompactionState `json:"latestCompaction,omitempty"`
 }
 
 // Usage tracks token usage.

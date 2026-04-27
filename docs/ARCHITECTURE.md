@@ -221,11 +221,13 @@ Each `.jsonl` file contains one JSON object per line:
 
 Sessions form a **linked tree** via `parentId`. The `session.Manager.BuildTree()` method assembles all sessions from the project directory into a `[]*TreeNode` tree. `FlattenTree` produces a depth-first flat list with structured layout metadata (gutters, connectors, indentation), which the TUI layer uses to render a clean Unicode box-drawing tree diagram.
 
-### Branching & Forking
-
-- **`/fork`** — Creates a child session copying all messages and metadata; `parentId` is set.
-- **`/clone`** — Duplicates a session with no parent link.
+### Branching, Rebasing & Merging
+- **`/branch [index]`** — Creates a child session linked via `parentId`. If an index is provided, only messages up to that point are copied.
+- **`/fork`** — Duplicates a session with no parent link (independent snapshot).
 - **`/tree` → `B`** — Forks any session in the tree hierarchy on the fly.
+- **`/rebase`** — Interactive mode to select a point in history to branch from, allowing for "what-if" scenarios or cleaning up conversation loops.
+- **`/merge <id>`** — Append-only merge of another session's messages into the current context.
+- **`/compact`** — Manually triggers a context compaction to free up tokens while preserving essential history.
 
 ---
 
@@ -274,11 +276,11 @@ historyEntry {
 This mirrors the `content[]` array model, ensuring correct temporal ordering of thinking, text, and tool calls.
 
 ### Modal System
-
-Three modal overlays share a `modalState` struct:
 - **Stats** — Token counts, session metadata, file/path info
 - **Config** — Active model, provider, compaction settings
 - **Session Tree** — Interactive paginated tree with structured branch visualization; supports Resume (`Enter`) and Branch (`B`)
+- **Rebase Picker** — Selection interface for history manipulation
+- **Merge Picker** — Fuzzy finder for selecting sessions to merge into the current conversation
 
 ---
 

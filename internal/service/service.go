@@ -3,6 +3,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,8 +107,13 @@ func (s *Service) getOrCreate(id string) *sessionEntry {
 	ag.SetExtensions(s.extensions)
 
 	if s.manager != nil {
-		if saved, err := s.manager.Load(id); err == nil {
-			ag.LoadSession(saved.ToTypes())
+		saved, err := s.manager.Load(id)
+		if err != nil {
+			// Create new session with this ID
+			saved, err = s.manager.CreateWithID(id)
+		}
+		if err == nil {
+			ag.SetSession(s.manager, saved)
 		}
 	}
 
@@ -137,25 +144,39 @@ func (s *Service) loadIfExists(id string) (*sessionEntry, bool) {
 	if s.manager == nil {
 		return nil, false
 	}
+
+	// Try to resolve the ID (might be a session ID or a record ID)
 	saved, err := s.manager.Load(id)
 	if err != nil {
-		return nil, false
+		saved, err = s.manager.LoadForRecord(id)
+		if err != nil {
+			return nil, false
+		}
 	}
+
+	// Re-check memory using the canonical session ID
+	if e, ok := s.lookup(saved.ID); ok {
+		s.mu.Lock()
+		e.lastUsed = time.Now()
+		s.mu.Unlock()
+		return e, true
+	}
+
 	s.mu.Lock()
 	// Double-check after acquiring write lock.
-	if e, ok := s.sessions[id]; ok {
+	if e, ok := s.sessions[saved.ID]; ok {
 		e.lastUsed = time.Now()
 		s.mu.Unlock()
 		return e, true
 	}
 	ag := agent.New(s.provider, s.registry)
 	ag.SetExtensions(s.extensions)
-	ag.LoadSession(saved.ToTypes())
+	ag.SetSession(s.manager, saved)
 	hbCtx, hbCancel := context.WithCancel(s.rootCtx)
 	e := &sessionEntry{ag: ag, cancelHB: hbCancel, lastUsed: time.Now()}
-	s.sessions[id] = e
+	s.sessions[saved.ID] = e
 	s.mu.Unlock()
-	go s.runHeartbeat(hbCtx, ag, id)
+	go s.runHeartbeat(hbCtx, ag, saved.ID)
 	return e, true
 }
 
@@ -185,37 +206,27 @@ func (s *Service) runHeartbeat(ctx context.Context, ag *agent.Agent, sessionID s
 }
 
 func (s *Service) saveSession(id string) {
-	if s.manager == nil {
-		return
-	}
-	s.mu.RLock()
-	e, ok := s.sessions[id]
-	s.mu.RUnlock()
-	if !ok {
-		return
-	}
-	st := e.ag.State()
-	sess := agentStateToSession(st)
-	sess.ID = id
-	_ = s.manager.Save(sess)
+	// Most saving is now handled in-turn by Agent calling mgr.Append*.
 }
 
 func agentStateToSession(st *agent.AgentState) *session.Session {
 	return &session.Session{
-		ID:           st.Session.ID,
-		ParentID:     st.Session.ParentID,
-		Name:         st.Session.Name,
-		CreatedAt:    st.Session.CreatedAt,
-		UpdatedAt:    time.Now(),
-		Model:        st.Model,
-		Provider:     st.Provider,
-		Thinking:     string(st.Thinking),
-		SystemPrompt: st.SystemPrompt,
-		Messages:     st.Messages,
-		DryRun:              st.DryRun,
+		ID:            st.Session.ID,
+		Name:          st.Session.Name,
+		CreatedAt:     st.Session.CreatedAt,
+		UpdatedAt:     time.Now(),
+		Model:         st.Model,
+		Provider:      st.Provider,
+		Thinking:      string(st.Thinking),
+		SystemPrompt:  st.SystemPrompt,
+		Messages:      st.Messages,
+		DryRun:        st.DryRun,
 		CompactionEnabled:   st.Compaction.Enabled,
 		CompactionReserve:   st.Compaction.ReserveTokens,
 		CompactionKeep:      st.Compaction.KeepRecentTokens,
+		ParentID:            st.Session.ParentID,
+		ParentMessageIndex:  st.Session.ParentMessageIndex,
+		MergeSourceID:       st.Session.MergeSourceID,
 	}
 }
 
@@ -445,7 +456,7 @@ func (s *Service) GetState(_ context.Context, req *pb.GetStateRequest) (*pb.GetS
 	st := e.ag.State()
 	info := e.ag.GetInfo()
 
-	return &pb.GetStateResponse{
+	resp := &pb.GetStateResponse{
 		SessionId:     req.SessionId,
 		Model:         st.Model,
 		Provider:      st.Provider,
@@ -466,7 +477,21 @@ func (s *Service) GetState(_ context.Context, req *pb.GetStateRequest) (*pb.GetS
 			SupportsImages: info.HasImages,
 			SupportsTools:  info.HasToolCall,
 		},
-	}, nil
+		ParentMessageIndex: -1,
+	}
+	if st.Session.ParentMessageIndex != nil {
+		resp.ParentMessageIndex = int32(*st.Session.ParentMessageIndex)
+	}
+	if st.Session.MergeSourceID != nil {
+		resp.MergeSourceId = *st.Session.MergeSourceID
+	}
+	// RebasedFrom is on the disk session; load it from manager if available.
+	if s.manager != nil {
+		if saved, err := s.manager.Load(req.SessionId); err == nil && saved.RebasedFrom != nil {
+			resp.RebasedFrom = *saved.RebasedFrom
+		}
+	}
+	return resp, nil
 }
 
 func (s *Service) GetMessages(_ context.Context, req *pb.GetMessagesRequest) (*pb.GetMessagesResponse, error) {
@@ -567,17 +592,56 @@ func (s *Service) Compact(ctx context.Context, req *pb.CompactRequest) (*pb.Comp
 	return &pb.CompactResponse{Ok: true}, nil
 }
 
+func (s *Service) BranchSession(_ context.Context, req *pb.BranchSessionRequest) (*pb.NewSessionResponse, error) {
+	if s.manager == nil {
+		return nil, status.Error(codes.Unimplemented, "session persistence disabled")
+	}
+
+	id := req.SessionId
+	if req.TargetId != "" {
+		id = req.TargetId
+	}
+
+	e, ok := s.loadIfExists(id)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "session or record %q not found", id)
+	}
+
+	source := e.ag.Session()
+	if source == nil {
+		return nil, status.Error(codes.FailedPrecondition, "session not initialized")
+	}
+
+	leafID := source.CurrentLeafID
+	if req.TargetId != "" {
+		leafID = req.TargetId
+	}
+
+	branched, err := s.manager.BranchAt(source, leafID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "branch session: %v", err)
+	}
+
+	s.getOrCreate(branched.ID)
+	return &pb.NewSessionResponse{SessionId: branched.ID}, nil
+}
+
 func (s *Service) ForkSession(_ context.Context, req *pb.ForkSessionRequest) (*pb.NewSessionResponse, error) {
 	if s.manager == nil {
 		return nil, status.Error(codes.Unimplemented, "session persistence disabled")
 	}
+
 	e, ok := s.loadIfExists(req.SessionId)
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "session %q not found", req.SessionId)
+		return nil, status.Errorf(codes.NotFound, "session or record %q not found", req.SessionId)
 	}
 
-	st := e.ag.State()
-	source := agentStateToSession(st)
+	source := e.ag.Session()
+	if source == nil {
+		return nil, status.Error(codes.FailedPrecondition, "session not initialized")
+	}
+
+	// Fork creates an independent copy at the current leaf
 	forked, err := s.manager.Fork(source)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "fork session: %v", err)
@@ -587,7 +651,7 @@ func (s *Service) ForkSession(_ context.Context, req *pb.ForkSessionRequest) (*p
 	return &pb.NewSessionResponse{SessionId: forked.ID}, nil
 }
 
-func (s *Service) CloneSession(_ context.Context, req *pb.CloneSessionRequest) (*pb.NewSessionResponse, error) {
+func (s *Service) RebaseSession(ctx context.Context, req *pb.RebaseSessionRequest) (*pb.NewSessionResponse, error) {
 	if s.manager == nil {
 		return nil, status.Error(codes.Unimplemented, "session persistence disabled")
 	}
@@ -598,20 +662,112 @@ func (s *Service) CloneSession(_ context.Context, req *pb.CloneSessionRequest) (
 
 	st := e.ag.State()
 	source := agentStateToSession(st)
-	cloned, err := s.manager.Clone(source)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "clone session: %v", err)
+
+	recordIDs := make([]string, 0, len(req.MsgIndices))
+	for _, idx := range req.MsgIndices {
+		if int(idx) >= 0 && int(idx) < len(st.Messages) {
+			recordIDs = append(recordIDs, st.Messages[idx].ID)
+		}
 	}
 
-	s.getOrCreate(cloned.ID)
-	return &pb.NewSessionResponse{SessionId: cloned.ID}, nil
+	// TODO: implement squash logic if req.Squash is true
+
+	rebased, err := s.manager.Rebase(source, recordIDs)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rebase session: %v", err)
+	}
+
+	s.getOrCreate(rebased.ID)
+	return &pb.NewSessionResponse{SessionId: rebased.ID}, nil
 }
 
-func (s *Service) GetSessionTree(_ context.Context, _ *pb.GetSessionTreeRequest) (*pb.GetSessionTreeResponse, error) {
+func (s *Service) MergeSession(ctx context.Context, req *pb.MergeSessionRequest) (*pb.NewSessionResponse, error) {
 	if s.manager == nil {
 		return nil, status.Error(codes.Unimplemented, "session persistence disabled")
 	}
-	roots, err := s.manager.BuildTree()
+
+	loadSource := func(id string) (*session.Session, error) {
+		if e, ok := s.loadIfExists(id); ok {
+			return agentStateToSession(e.ag.State()), nil
+		}
+		return nil, status.Errorf(codes.NotFound, "session %q not found", id)
+	}
+
+	sessA, err := loadSource(req.SessionIdA)
+	if err != nil {
+		return nil, err
+	}
+	sessB, err := loadSource(req.SessionIdB)
+	if err != nil {
+		return nil, err
+	}
+
+	synthesisText, err := s.buildMergeSynthesis(ctx, sessA, sessB)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "merge synthesis: %v", err)
+	}
+
+	now := time.Now()
+	mergedID := uuid.New().String()
+	merged := &session.Session{
+		ID:            mergedID,
+		ParentID:      &sessA.ID,
+		MergeSourceID: &sessB.ID,
+		Model:         sessA.Model,
+		Provider:      sessA.Provider,
+		Thinking:      sessA.Thinking,
+		SystemPrompt:  sessA.SystemPrompt,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		DryRun:              sessA.DryRun,
+		CompactionEnabled:   sessA.CompactionEnabled,
+		CompactionReserve:   sessA.CompactionReserve,
+		CompactionKeep:      sessA.CompactionKeep,
+		Messages: []types.Message{
+			{Role: "user", Content: mergeUserPrompt(sessA.ID, sessB.ID)},
+			{Role: "assistant", Content: synthesisText},
+		},
+	}
+	if err := s.manager.Save(merged); err != nil {
+		return nil, status.Errorf(codes.Internal, "save merged session: %v", err)
+	}
+	s.getOrCreate(mergedID)
+	return &pb.NewSessionResponse{SessionId: mergedID}, nil
+}
+
+func (s *Service) GetSessionTree(_ context.Context, req *pb.GetSessionTreeRequest) (*pb.GetSessionTreeResponse, error) {
+	if s.manager == nil {
+		return nil, status.Error(codes.Unimplemented, "session persistence disabled")
+	}
+
+	currentLeaf := req.SessionId
+	if currentLeaf == "" {
+		// Try to find an active session if none specified
+		s.mu.RLock()
+		for id := range s.sessions {
+			currentLeaf = id
+			break
+		}
+		s.mu.RUnlock()
+	}
+
+	// Resolve session ID to its current active leaf (if possible)
+	if currentLeaf != "" {
+		s.mu.RLock()
+		if entry, ok := s.sessions[currentLeaf]; ok {
+			currentLeaf = entry.ag.Session().CurrentLeafID
+		}
+		s.mu.RUnlock()
+
+		// If still matching the input ID, try loading it to find the last record's ID
+		if currentLeaf == req.SessionId {
+			if sess, err := s.manager.Load(currentLeaf); err == nil {
+				currentLeaf = sess.CurrentLeafID
+			}
+		}
+	}
+
+	roots, err := s.manager.BuildTree(currentLeaf, req.Global)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "build tree: %v", err)
 	}
@@ -624,16 +780,117 @@ func (s *Service) GetSessionTree(_ context.Context, _ *pb.GetSessionTreeRequest)
 func sessionTreeToProto(nodes []*session.TreeNode) []*pb.SessionNode {
 	res := make([]*pb.SessionNode, 0, len(nodes))
 	for _, n := range nodes {
-		res = append(res, &pb.SessionNode{
-			SessionId:    n.ID,
-			Name:         n.Name,
-			FirstMessage: n.FirstMessage,
-			CreatedAt:    n.CreatedAt.Unix(),
-			UpdatedAt:    n.UpdatedAt.Unix(),
-			Children:     sessionTreeToProto(n.Children),
-		})
+		node := &pb.SessionNode{
+			SessionId:          n.ID,
+			Name:               n.Name,
+			FirstMessage:       n.FirstMessage,
+			CreatedAt:          n.CreatedAt.Unix(),
+			UpdatedAt:          n.UpdatedAt.Unix(),
+			Children:           sessionTreeToProto(n.Children),
+			ParentMessageIndex: -1,
+			Role:               n.Role,
+			Content:            n.Content,
+			IsActive:           n.IsActive,
+		}
+		if n.ParentMessageIndex != nil {
+			node.ParentMessageIndex = int32(*n.ParentMessageIndex)
+		}
+		if n.MergeSourceID != nil {
+			node.MergeSourceId = *n.MergeSourceID
+		}
+		res = append(res, node)
 	}
 	return res
+}
+
+// ── LLM Synthesis Helpers ─────────────────────────────────────────────────────
+
+// squashMessages condenses the selected messages from source into a single
+// user+assistant pair using the LLM provider.
+
+// buildMergeSynthesis calls the LLM to produce a synthesis of two session branches.
+func (s *Service) buildMergeSynthesis(ctx context.Context, a, b *session.Session) (string, error) {
+	prompt := buildMergePrompt(a, b)
+	return s.llmOneShotText(ctx, a.Model, a.Provider, prompt)
+}
+
+// llmOneShotText sends a single user message to the provider and drains the stream
+// into a plain text string.
+func (s *Service) llmOneShotText(ctx context.Context, model, _ string, userMsg string) (string, error) {
+	ch, err := s.provider.Stream(ctx, &llm.CompletionRequest{
+		Model: model,
+		Messages: []types.Message{
+			{Role: "user", Content: userMsg},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	for ev := range ch {
+		if ev.Error != nil {
+			return "", ev.Error
+		}
+		if ev.Type == llm.EventTextDelta {
+			sb.WriteString(ev.Content)
+		}
+	}
+	return sb.String(), nil
+}
+
+
+func buildMergePrompt(a, b *session.Session) string {
+	const maxMsgs = 20
+	var sb strings.Builder
+	sb.WriteString("I have two AI session branches that explored different approaches and I want to merge their knowledge.\n\n")
+
+	fmt.Fprintf(&sb, "## Branch A (session %s, last %d messages)\n\n", shortID(a.ID), min(len(a.Messages), maxMsgs))
+	for _, m := range last(a.Messages, maxMsgs) {
+		fmt.Fprintf(&sb, "**%s:** %s\n\n", m.Role, truncate(m.Content, 300))
+	}
+
+	fmt.Fprintf(&sb, "## Branch B (session %s, last %d messages)\n\n", shortID(b.ID), min(len(b.Messages), maxMsgs))
+	for _, m := range last(b.Messages, maxMsgs) {
+		fmt.Fprintf(&sb, "**%s:** %s\n\n", m.Role, truncate(m.Content, 300))
+	}
+
+	sb.WriteString("Synthesize a unified context: summarise what each branch accomplished, " +
+		"note any conflicts or overlaps, and provide a coherent starting point that " +
+		"captures the knowledge from both branches.")
+	return sb.String()
+}
+
+func mergeUserPrompt(idA, idB string) string {
+	return fmt.Sprintf("Merge of session %s and session %s", shortID(idA), shortID(idB))
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+func last[T any](slice []T, n int) []T {
+	if len(slice) <= n {
+		return slice
+	}
+	return slice[len(slice)-n:]
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ── Internal Helpers ───────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ import (
 func Build() error {
 	v := getVersion()
 	ldflags := fmt.Sprintf("-X main.version=%s", v)
-	return run("go", "build", "-ldflags", ldflags, "-o", binaryPath(), "./cmd/glm")
+	return execCmd("go", "build", "-ldflags", ldflags, "-o", binaryPath(), "./cmd/glm")
 }
 
 // Release builds cross-platform binaries and archives them.
@@ -67,13 +67,13 @@ func Release() error {
 		if p.os == "windows" {
 			// .zip
 			zipName := fmt.Sprintf("glm-%s-%s-%s.zip", v, p.os, p.arch)
-			if err := run("zip", "-j", filepath.Join("dist", zipName), target); err != nil {
+			if err := execCmd("zip", "-j", filepath.Join("dist", zipName), target); err != nil {
 				return fmt.Errorf("failed to zip %s (is zip installed?): %w", zipName, err)
 			}
 		} else {
 			// .tar.gz
 			tarName := fmt.Sprintf("glm-%s-%s-%s.tar.gz", v, p.os, p.arch)
-			if err := run("tar", "-czf", filepath.Join("dist", tarName), "-C", "dist", name); err != nil {
+			if err := execCmd("tar", "-czf", filepath.Join("dist", tarName), "-C", "dist", name); err != nil {
 				return fmt.Errorf("failed to tar %s: %w", tarName, err)
 			}
 		}
@@ -138,17 +138,17 @@ func Test() error {
 	if os.Getenv("COVERAGE") != "" {
 		args = append([]string{"test", "-coverprofile=coverage.out", "-v", "./..."})
 	}
-	return run("go", args...)
+	return execCmd("go", args...)
 }
 
 // Vet checks for static analysis issues.
 func Vet() error {
-	return run("go", "vet", "./...")
+	return execCmd("go", "vet", "./...")
 }
 
 // Lint runs golangci-lint.
 func Lint() error {
-	return run("golangci-lint", "run", "./...")
+	return execCmd("golangci-lint", "run", "./...")
 }
 
 // Clean removes build artifacts.
@@ -160,12 +160,12 @@ func Clean() error {
 
 // Format runs gofmt.
 func Format() error {
-	return run("go", "fmt", "./...")
+	return execCmd("go", "fmt", "./...")
 }
 
 // Tidy runs go mod tidy.
 func Tidy() error {
-	return run("go", "mod", "tidy")
+	return execCmd("go", "mod", "tidy")
 }
 
 // Generate runs protoc to generate Go gRPC stubs for extensions.
@@ -173,15 +173,15 @@ func Tidy() error {
 // - buf.gen.yaml          → internal/gen/gollm/v1/ (agent service)
 // - buf.gen.extensions.yaml → extensions/gen/      (plugin extension service)
 func Generate() error {
-	if err := run("buf", "generate", "proto", "--template", "buf.gen.yaml"); err != nil {
+	if err := execCmd("buf", "generate", "proto", "--template", "buf.gen.yaml"); err != nil {
 		return err
 	}
-	return run("buf", "generate", "extensions/proto", "--template", "buf.gen.extensions.yaml")
+	return execCmd("buf", "generate", "extensions/proto", "--template", "buf.gen.extensions.yaml")
 }
 
 // Vuln runs govulncheck to scan for known vulnerabilities in dependencies.
 func Vuln() error {
-	return run("go", "run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...")
+	return execCmd("go", "run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...")
 }
 
 // All runs build, test, vet, lint, and vulnerability scan.
@@ -207,15 +207,15 @@ func All() error {
 
 // Install builds and copies to GOPATH/bin.
 func Install() error {
-	return run("go", "install", "./cmd/glm")
+	return execCmd("go", "install", "./cmd/glm")
 }
 
 // Run builds and executes gollm with the given arguments.
-func Run(args ...string) error {
+func Run() error {
 	if err := Build(); err != nil {
 		return err
 	}
-	cmd := exec.Command(binaryPath(), args...)
+	cmd := exec.Command(binaryPath())
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -224,12 +224,12 @@ func Run(args ...string) error {
 
 func binaryPath() string {
 	if runtime.GOOS == "windows" {
-		return "glm.exe"
+		return ".\\glm.exe"
 	}
-	return "glm"
+	return "./glm"
 }
 
-func run(name string, arg ...string) error {
+func execCmd(name string, arg ...string) error {
 	cmd := exec.Command(name, arg...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
