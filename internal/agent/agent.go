@@ -559,11 +559,13 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 	// 2. Identify previous summary and boundary
 	var previousSummary string
 	boundaryStart := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "success" && strings.HasPrefix(messages[i].Content, summarySentinel) {
-			previousSummary = messages[i].Content
-			boundaryStart = i + 1
-			break
+	if a.state.LatestCompaction != nil {
+		previousSummary = a.state.LatestCompaction.Summary
+		for i, m := range messages {
+			if m.ID == a.state.LatestCompaction.FirstKeptEntryID {
+				boundaryStart = i
+				break
+			}
 		}
 	}
 
@@ -597,6 +599,9 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 	}
 
 	// 5. Extract File Context
+	// Release the lock during context extraction and LLM calls for responsiveness
+	a.mu.Unlock()
+
 	readFiles, modFiles := a.extractFileContext(messagesToSummarize)
 	if cutResult.IsSplitTurn {
 		r, m := a.extractFileContext(turnPrefixMessages)
@@ -612,12 +617,6 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 	}
 
 	// 6. Generate Summaries via LLM
-	// The main summary and the optional split-turn prefix summary can be generated
-	// concurrently. Both goroutines use ctx, so a cancellation propagates into the
-	// provider stream and they exit quickly. The single-slot channels guarantee the
-	// goroutines never block on a send even if we exit early via ctx.Done().
-	a.mu.Unlock()
-
 	summaryChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 	go func() {
@@ -649,10 +648,18 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 		// Re-acquire the lock so the deferred unlock is balanced, then bail.
 		a.mu.Lock()
 		return
+	case <-a.stop:
+		// Re-acquire the lock so the deferred unlock is balanced, then bail.
+		a.mu.Lock()
+		return
 	}
 
 	// Append file activity
 	summaryText += a.formatFileActivity(readFiles, modFiles)
+
+	if cutResult.IsSplitTurn && turnPrefixSummary != "" {
+		summaryText += "\n\n### Split Turn Context\n" + turnPrefixSummary
+	}
 
 	a.mu.Lock()
 
@@ -673,39 +680,28 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 		FirstKeptEntryID: firstKeptID,
 	}
 	
-	// Add the summary message to the history for display as a "system notice"
-	summaryMsg := Message{
-		ID:        uuid.New().String(),
-		Role:      "success",
-		Content:   summaryText,
-		Timestamp: time.Now(),
-	}
-	
-	// Insert it at the boundary to show where compaction happened in the transcript
-	messages = make([]Message, 0, len(a.state.Messages)+1)
-	messages = append(messages, a.state.Messages[:cutResult.FirstKeptIndex]...)
-	messages = append(messages, summaryMsg)
-	if cutResult.IsSplitTurn && turnPrefixSummary != "" {
-		messages = append(messages, Message{
-			ID:        uuid.New().String(),
-			Role:      "success",
-			Content:   "**Turn Context (split turn):**\n\n" + turnPrefixSummary,
-			Timestamp: time.Now(),
-		})
-	}
-	messages = append(messages, a.state.Messages[cutResult.FirstKeptIndex:]...)
-	a.state.Messages = messages
-
-	// Record in session tree
-	if a.mgr != nil && a.sess != nil {
-		_ = a.mgr.AppendCompaction(a.sess, summaryText, firstKeptID, tokensBefore)
-	}
-
 	tokensAfter := a.estimateContextTokensNoLock()
 	freed = tokensBefore - tokensAfter
 	if freed < 0 {
 		freed = 0
 	}
+
+	// Add a concise compaction notice for the history/TUI instead of the full summary
+	compactionMsg := Message{
+		ID:        uuid.New().String(),
+		Role:      "compaction",
+		Content:   fmt.Sprintf("Context compacted. Freed %d tokens.", freed),
+		Timestamp: time.Now(),
+	}
+	
+	a.state.Messages = append(a.state.Messages, compactionMsg)
+
+	// Record in session tree
+	if a.mgr != nil && a.sess != nil {
+		_ = a.mgr.AppendCompaction(a.sess, summaryText, firstKeptID, tokensBefore, tokensAfter)
+	}
+
+	a.events.Publish(Event{Type: EventTokens, Value: int64(tokensAfter)})
 }
 
 func (a *Agent) appendMessage(msg Message) {

@@ -51,11 +51,24 @@ func Run(client pb.AgentServiceClient, sessionID string, cfg *config.Config, the
 	style := themes.NewStyle(*theme)
 	m := newModel(modelName, providerName, string(cfg.ThinkingLevel), contextWindow, client, sessionID, eventCh, mgr, cfg, initialInput, style)
 	m.syncHistoryFromService()
-	if opts.PreloadSession == "continue" && len(m.history) > 0 {
-		m.history = append(m.history, historyEntry{
-			role:  "info",
-			items: []contentItem{{kind: contentItemText, text: "Resumed session: " + sessionID}},
-		})
+	isContinue := opts.PreloadSession == "continue"
+	isResume := strings.HasPrefix(opts.PreloadSession, "resume:")
+	if isContinue || isResume {
+		if len(m.history) > 0 {
+			m.history = append(m.history, historyEntry{
+				role:  "info",
+				items: []contentItem{{kind: contentItemText, text: "Resumed session: " + sessionID}},
+			})
+		} else {
+			msg := "No sessions with content found to continue; starting a new session"
+			if isResume {
+				msg = "Could not resume session; starting a new session"
+			}
+			m.history = append(m.history, historyEntry{
+				role:  "warning",
+				items: []contentItem{{kind: contentItemText, text: msg}},
+			})
+		}
 	}
 	m.models = cfg.Models
 	m.modelIndex = 0

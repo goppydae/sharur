@@ -20,7 +20,7 @@ func newTestManager(t *testing.T) *Manager {
 
 func TestStore_AppendRead_Tree(t *testing.T) {
 	dir := t.TempDir()
-	s := newStore(dir)
+	s := newStore(dir, dir)
 
 	id := "test-tree"
 	// 1. Write session header
@@ -77,7 +77,7 @@ func TestStore_AppendRead_Tree(t *testing.T) {
 
 func TestStore_TimestampedFilename(t *testing.T) {
 	dir := t.TempDir()
-	s := newStore(dir)
+	s := newStore(dir, dir)
 
 	id := "abc-123"
 	r := record{Type: TypeSession, ID: "root"}

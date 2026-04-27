@@ -2,6 +2,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,9 +93,10 @@ func (s *Session) ToTypes() *types.Session {
 
 // Manager creates, lists, loads, and saves sessions.
 type Manager struct {
-	dir   string
-	store *store
-	mu    sync.RWMutex
+	baseDir string
+	dir     string
+	store   *store
+	mu      sync.RWMutex
 }
 
 // NewManager creates a new session manager. It organizes sessions into
@@ -119,8 +121,9 @@ func NewManager(baseDir string) *Manager {
 	projectDir := filepath.Join(baseDir, projectPath(cwd))
 
 	return &Manager{
-		dir:   projectDir,
-		store: newStore(projectDir),
+		baseDir: baseDir,
+		dir:     projectDir,
+		store:   newStore(baseDir, projectDir),
 	}
 }
 
@@ -171,7 +174,27 @@ func (m *Manager) Load(id string) (*Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// 1. Try local project first.
 	records, err := m.store.read(id)
+	if err != nil {
+		// 2. Try scanning other projects.
+		entries, _ := os.ReadDir(m.baseDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			pdir := filepath.Join(m.baseDir, e.Name())
+			if pdir == m.dir {
+				continue
+			}
+			ps := newStore(m.baseDir, pdir)
+			records, err = ps.read(id)
+			if err == nil {
+				break
+			}
+		}
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -202,26 +225,41 @@ func (m *Manager) LoadForRecord(recordID string) (*Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	ids, err := m.store.list()
-	if err != nil {
-		return nil, err
+	normID := strings.TrimSpace(strings.ToLower(recordID))
+
+	// Get all project directories
+	entries, _ := os.ReadDir(m.baseDir)
+	var projectDirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			projectDirs = append(projectDirs, filepath.Join(m.baseDir, e.Name()))
+		}
+	}
+	if len(projectDirs) == 0 {
+		projectDirs = []string{m.dir}
 	}
 
-	normID := strings.TrimSpace(strings.ToLower(recordID))
-	for _, fileID := range ids {
-		records, err := m.store.read(fileID)
+	for _, pdir := range projectDirs {
+		ps := newStore(m.baseDir, pdir)
+		ids, err := ps.list()
 		if err != nil {
 			continue
 		}
-		for _, r := range records {
-			if strings.TrimSpace(strings.ToLower(r.ID)) == normID {
-				// Found it! Load this file.
-				sess := &Session{
-					ID:      fileID,
-					Records: records,
+		for _, fileID := range ids {
+			records, err := ps.read(fileID)
+			if err != nil {
+				continue
+			}
+			for _, r := range records {
+				if strings.TrimSpace(strings.ToLower(r.ID)) == normID {
+					// Found it! Load this file.
+					sess := &Session{
+						ID:      fileID,
+						Records: records,
+					}
+					_ = sess.buildSessionContext(r.ID)
+					return sess, nil
 				}
-				_ = sess.buildSessionContext(r.ID)
-				return sess, nil
 			}
 		}
 	}
@@ -271,15 +309,15 @@ func (m *Manager) List() ([]string, error) {
 }
 
 // LatestWithMessages returns the ID of the session whose most recent message
-// has the latest timestamp. Returns "" if no session with messages exists.
+// has the latest timestamp. Returns "", nil if no session with messages exists.
 // This is used by --continue.
-func (m *Manager) LatestWithMessages() string {
+func (m *Manager) LatestWithMessages() (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	ids, err := m.store.list()
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var best string
 	var bestTime time.Time
@@ -293,7 +331,7 @@ func (m *Manager) LatestWithMessages() string {
 			best = id
 		}
 	}
-	return best
+	return best, nil
 }
 
 // ListSummaries returns summaries of all stored sessions.
@@ -400,16 +438,20 @@ func (s *Session) buildSessionContext(leafID string) error {
 				s.Messages = append(s.Messages, msg)
 			}
 		case TypeCompaction:
-			// Add the compaction summary to the transcript history
-			s.Messages = append(s.Messages, message{
-				Role:    "success",
-				Content: r.Summary,
-			})
 			// Track the latest compaction to inform the LLM context boundary
 			s.LatestCompaction = &types.CompactionState{
 				Summary:          r.Summary,
 				FirstKeptEntryID: r.FirstKeptEntryID,
 			}
+			// Add a concise notice for the history/TUI
+			freed := r.TokensBefore - r.TokensAfter
+			if freed < 0 {
+				freed = 0
+			}
+			s.Messages = append(s.Messages, types.Message{
+				Role:    "compaction",
+				Content: fmt.Sprintf("Context compacted. Freed %d tokens.", freed),
+			})
 		}
 		
 		if r.ParentID != nil {
@@ -520,7 +562,7 @@ func (m *Manager) AppendThinkingLevelChange(sess *Session, level string) error {
 }
 
 // AppendCompaction records a compaction event in the session.
-func (m *Manager) AppendCompaction(sess *Session, summary string, firstKeptEntryID string, tokensBefore int) error {
+func (m *Manager) AppendCompaction(sess *Session, summary string, firstKeptEntryID string, tokensBefore, tokensAfter int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -532,6 +574,7 @@ func (m *Manager) AppendCompaction(sess *Session, summary string, firstKeptEntry
 		Summary:          summary,
 		FirstKeptEntryID: firstKeptEntryID,
 		TokensBefore:     tokensBefore,
+		TokensAfter:      tokensAfter,
 		Timestamp:        time.Now().UTC().Format(time.RFC3339Nano),
 	}
 

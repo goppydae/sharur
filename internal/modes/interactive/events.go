@@ -16,17 +16,29 @@ func (m *model) handleAgentEvent(ev *pb.AgentEvent) tea.Cmd {
 
 	switch p := ev.Payload.(type) {
 	case *pb.AgentEvent_CompactStart:
-		_ = p
 		m.isCompacting.Store(true)
 		cmds = append(cmds, m.spinner.Tick)
 		cmds = append(cmds, m.stopwatch.Reset())
 		cmds = append(cmds, m.stopwatch.Start())
+		m.history = append(m.history, historyEntry{
+			role: "compaction",
+			items: []contentItem{{
+				kind: contentItemText,
+				text: "Compacting context...",
+			}},
+		})
 
 	case *pb.AgentEvent_CompactEnd:
-		_ = p
 		m.isCompacting.Store(false)
 		if !m.isRunning {
 			cmds = append(cmds, m.stopwatch.Stop())
+		}
+		// Update the latest compaction notice in history
+		for i := len(m.history) - 1; i >= 0; i-- {
+			if m.history[i].role == "compaction" {
+				m.history[i].items[0].text = p.CompactEnd.Message
+				break
+			}
 		}
 		cmds = append(cmds, m.syncHistoryCmd())
 		cmds = append(cmds, m.syncStateCmd())
@@ -187,7 +199,9 @@ func (m *model) handleAgentEvent(ev *pb.AgentEvent) tea.Cmd {
 		m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: p.Error.Message}}})
 
 	case *pb.AgentEvent_Tokens:
-		m.tokens = int(p.Tokens.Value)
+		if p.Tokens.Value > 0 {
+			m.tokens = int(p.Tokens.Value)
+		}
 	}
 
 	m.refreshViewport()
@@ -219,7 +233,7 @@ func (m *model) syncStateCmd() tea.Cmd {
 // compactCmd returns a command to trigger a context compaction.
 func (m *model) compactCmd() tea.Cmd {
 	return func() tea.Msg {
-		_, err := m.client.Compact(context.Background(), &pb.CompactRequest{SessionId: m.sessionID})
+		_, err := m.client.Compact(m.ctx, &pb.CompactRequest{SessionId: m.sessionID})
 		return compactDoneMsg{err: err}
 	}
 }
@@ -230,7 +244,7 @@ func (m *model) applyHistorySync(msgs []*pb.ConversationMessage) {
 	for i := len(m.history) - 1; i >= 0; i-- {
 		entry := m.history[i]
 		// Preserve trailing assistant messages if running, or any notice boxes
-		isNotice := entry.role == "info" || entry.role == "success" || entry.role == "warning" || entry.role == "error" || entry.role == "system"
+		isNotice := entry.role == "info" || entry.role == "success" || entry.role == "warning" || entry.role == "error" || entry.role == "system" || entry.role == "compaction"
 		if (m.isRunning && entry.role == "assistant") || isNotice {
 			trailingMeta = append([]historyEntry{entry}, trailingMeta...)
 			continue
@@ -241,6 +255,9 @@ func (m *model) applyHistorySync(msgs []*pb.ConversationMessage) {
 	m.history = make([]historyEntry, 0, len(msgs)+len(trailingMeta))
 
 	for _, msg := range msgs {
+		if strings.HasPrefix(msg.Content, "<!-- gollm-summary -->") || strings.HasPrefix(msg.Content, "**Turn Context (split turn):**") {
+			continue
+		}
 		if msg.Role == "tool" {
 			found := false
 			for hIdx := len(m.history) - 1; hIdx >= 0; hIdx-- {
@@ -306,6 +323,20 @@ func (m *model) applyHistorySync(msgs []*pb.ConversationMessage) {
 	m.newAssistantEntry = true
 
 	m.updatePromptHistory(msgs)
+	
+	// Re-calculate total tokens from the synced history
+	m.tokens = 0
+	for _, entry := range m.history {
+		for _, item := range entry.items {
+			switch item.kind {
+			case contentItemText, contentItemThinking:
+				m.tokens += (len(item.text) + 3) / 4
+			case contentItemToolOutput:
+				m.tokens += (len(item.out.content) + 3) / 4
+			}
+		}
+	}
+
 	m.refreshViewport()
 }
 

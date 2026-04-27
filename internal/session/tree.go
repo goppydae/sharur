@@ -1,9 +1,19 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+)
+
+type TreeScope int
+
+const (
+	ScopeSession TreeScope = iota
+	ScopeProject
+	ScopeGlobal
 )
 
 // TreeNode represents a node in the session tree.
@@ -32,84 +42,102 @@ type TreeNode struct {
 
 // BuildTree loads all sessions and returns the roots of a session tree.
 // If global is false, it only returns the tree containing currentID.
-func (m *Manager) BuildTree(currentID string, global bool) ([]*TreeNode, error) {
+func (m *Manager) BuildTree(currentID string, scope TreeScope) ([]*TreeNode, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	ids, err := m.store.list()
-	if err != nil {
-		return nil, err
+	var projectDirs []string
+	if scope == ScopeGlobal {
+		entries, err := os.ReadDir(m.baseDir)
+		if err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					projectDirs = append(projectDirs, filepath.Join(m.baseDir, e.Name()))
+				}
+			}
+		}
+	}
+	if len(projectDirs) == 0 {
+		projectDirs = []string{m.dir}
 	}
 
 	byID := make(map[string]*TreeNode)
 	
-	for _, fileID := range ids {
-		records, err := m.store.read(fileID)
+	for _, pdir := range projectDirs {
+		pstore := newStore(m.baseDir, pdir)
+		ids, err := pstore.list()
 		if err != nil {
 			continue
 		}
 
-		for _, r := range records {
-			if r.ID == "" {
+		for _, fileID := range ids {
+			records, err := pstore.read(fileID)
+			if err != nil {
 				continue
 			}
 
-			normID := strings.TrimSpace(strings.ToLower(r.ID))
-			node, ok := byID[normID]
-			if !ok {
-				node = &TreeNode{
-					ID:       r.ID,
-					ParentID: r.ParentID,
+			for _, r := range records {
+				if r.ID == "" {
+					continue
 				}
-				byID[normID] = node
-			}
 
-			if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
-				if node.CreatedAt.IsZero() || t.Before(node.CreatedAt) {
-					node.CreatedAt = t
+				normID := strings.TrimSpace(strings.ToLower(r.ID))
+				node, ok := byID[normID]
+				if !ok {
+					node = &TreeNode{
+						ID:       r.ID,
+						ParentID: r.ParentID,
+					}
+					byID[normID] = node
 				}
-				if t.After(node.UpdatedAt) {
-					node.UpdatedAt = t
-				}
-			}
 
-			switch r.Type {
-			case TypeSession:
-				if node.Name == "" {
-					node.Name = r.ID[:8]
-				}
-				node.Role = "session"
-				// Map the fileID to this node as well, so we can find it by filename.
-				byID[strings.TrimSpace(strings.ToLower(fileID))] = node
-			case TypeSessionInfo:
-				node.Name = r.Name
-				node.Role = "info"
-				node.Content = r.Name
-			case TypeMessage:
-				if r.Message != nil {
-					node.Role = r.Message.Role
-					node.Content = r.Message.Content
-					if node.FirstMessage == "" {
-						node.FirstMessage = r.Message.Content
+				if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
+					if node.CreatedAt.IsZero() || t.Before(node.CreatedAt) {
+						node.CreatedAt = t
+					}
+					if t.After(node.UpdatedAt) {
+						node.UpdatedAt = t
 					}
 				}
-			case TypeModelChange:
-				node.Model = r.Model
-				node.Provider = r.Provider
-				node.Role = "model"
-				node.Content = r.Provider + "/" + r.Model
-			case TypeThinkingLevelChange:
-				node.Role = "thinking"
-				node.Content = r.ThinkingLevel
-			case TypeCompaction:
-				node.Role = "compaction"
-				node.Content = r.Summary
-			case TypeBranchSummary:
-				node.Role = "summary"
-				node.Content = r.Summary
-			case TypeLabel:
-				node.Role = "label"
-				node.Content = r.Label
+
+				switch r.Type {
+				case TypeSession:
+					if node.Name == "" {
+						node.Name = r.ID[:8]
+					}
+					node.Role = "session"
+					// Map the fileID to this node as well, so we can find it by filename.
+					byID[strings.TrimSpace(strings.ToLower(fileID))] = node
+				case TypeSessionInfo:
+					node.Name = r.Name
+					node.Role = "info"
+					node.Content = r.Name
+				case TypeMessage:
+					if r.Message != nil {
+						node.Role = r.Message.Role
+						node.Content = r.Message.Content
+						if node.FirstMessage == "" {
+							node.FirstMessage = r.Message.Content
+						}
+					}
+				case TypeModelChange:
+					node.Model = r.Model
+					node.Provider = r.Provider
+					node.Role = "model"
+					node.Content = r.Provider + "/" + r.Model
+				case TypeThinkingLevelChange:
+					node.Role = "thinking"
+					node.Content = r.ThinkingLevel
+				case TypeCompaction:
+					node.Role = "compaction"
+					node.Content = r.Summary
+				case TypeBranchSummary:
+					node.Role = "summary"
+					node.Content = r.Summary
+				case TypeLabel:
+					node.Role = "label"
+					node.Content = r.Label
+				}
 			}
 		}
 	}
@@ -145,7 +173,7 @@ func (m *Manager) BuildTree(currentID string, global bool) ([]*TreeNode, error) 
 	}
 
 	// Filter to current session lineage if requested
-	if !global && currentID != "" {
+	if scope == ScopeSession && currentID != "" {
 		root := findRoot(byID, byShortID, currentID)
 		if root != nil {
 			roots = []*TreeNode{root}

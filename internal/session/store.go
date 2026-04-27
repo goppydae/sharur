@@ -50,6 +50,7 @@ type record struct {
 	Summary          string `json:"summary,omitempty"`
 	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
 	TokensBefore     int    `json:"tokensBefore,omitempty"`
+	TokensAfter      int    `json:"tokensAfter,omitempty"`
 	FromID           string `json:"fromId,omitempty"` // For branch_summary
 
 	// For "label"
@@ -67,11 +68,12 @@ type record struct {
 
 // store handles low-level JSONL file I/O for a session directory.
 type store struct {
-	dir string
+	baseDir string
+	dir     string
 }
 
-func newStore(dir string) *store {
-	return &store{dir: dir}
+func newStore(baseDir, dir string) *store {
+	return &store{baseDir: baseDir, dir: dir}
 }
 
 // path returns the file path for a given session ID.
@@ -81,16 +83,15 @@ func (s *store) path(id string) string {
 		return id
 	}
 
-	// 1. Check for exact match (backward compatibility)
+	suffix := "_" + id + ".jsonl"
+
+	// 1. Check current project directory (s.dir)
 	p := filepath.Join(s.dir, id+".jsonl")
 	if _, err := os.Stat(p); err == nil {
 		return p
 	}
-
-	// 2. Search for timestamped variant: {Timestamp}_{ID}.jsonl
 	entries, err := os.ReadDir(s.dir)
 	if err == nil {
-		suffix := "_" + id + ".jsonl"
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
 				return filepath.Join(s.dir, e.Name())
@@ -98,7 +99,39 @@ func (s *store) path(id string) string {
 		}
 	}
 
-	return p // fallback to default
+	// 2. Scan all project directories in baseDir if it's set
+	if s.baseDir != "" {
+		projects, err := os.ReadDir(s.baseDir)
+		if err == nil {
+			for _, pentry := range projects {
+				if !pentry.IsDir() {
+					continue
+				}
+				pdir := filepath.Join(s.baseDir, pentry.Name())
+				if pdir == s.dir {
+					continue
+				}
+
+				// Check exact match in this project
+				tp := filepath.Join(pdir, id+".jsonl")
+				if _, err := os.Stat(tp); err == nil {
+					return tp
+				}
+
+				// Check suffix match in this project
+				pentries, err := os.ReadDir(pdir)
+				if err == nil {
+					for _, pe := range pentries {
+						if !pe.IsDir() && strings.HasSuffix(pe.Name(), suffix) {
+							return filepath.Join(pdir, pe.Name())
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return p // Fallback to current project path (even if it doesn't exist)
 }
 
 // appendRecord appends a single record to the session file.
@@ -241,9 +274,6 @@ func (s *store) readSummary(id string) (*SessionSummary, error) {
 	for _, r := range records {
 		switch r.Type {
 		case TypeSession:
-			if sum.ID == "" || sum.ID == id {
-				sum.ID = r.ID
-			}
 			sum.ParentID = r.ParentID
 			if t, err := time.Parse(time.RFC3339Nano, r.Timestamp); err == nil {
 				sum.CreatedAt = t

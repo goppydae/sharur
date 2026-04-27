@@ -16,6 +16,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	pb "github.com/goppydae/gollm/internal/gen/gollm/v1"
 	"github.com/goppydae/gollm/internal/prompts"
 	"github.com/goppydae/gollm/internal/skills"
@@ -46,6 +49,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentEventMsg:
 		cmd = m.handleAgentEvent(msg.ev)
+		// Re-subscribe to events if the agent is still running or compacting
+		if m.isRunning || m.isCompacting.Load() {
+			cmd = tea.Batch(cmd, listenForEvent(m.eventCh))
+		}
 
 	case tea.MouseWheelMsg:
 		if !m.modal.visible {
@@ -113,7 +120,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.stopwatch.Stop()
 		}
 		if msg.err != nil {
-			m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Compaction failed: %v", msg.err)}}})
+			if status.Code(msg.err) == codes.Canceled || strings.Contains(msg.err.Error(), "context canceled") {
+				m.history = append(m.history, historyEntry{role: "info", items: []contentItem{{kind: contentItemText, text: "Compaction canceled"}}})
+			} else {
+				m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Compaction failed: %v", msg.err)}}})
+			}
 		}
 		m.refreshViewport()
 		cmd = tea.Batch(cmd, m.syncHistoryCmd(), m.syncStateCmd())
@@ -133,9 +144,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = tea.Batch(m.syncHistoryCmd(), m.syncStateCmd(), listenForEvent(m.eventCh))
 	}
 
-	if m.isRunning || m.isCompacting.Load() {
-		cmd = tea.Batch(cmd, listenForEvent(m.eventCh))
-	}
+
 
 	return m, cmd
 }
@@ -210,7 +219,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.historyIndex = -1
 		m.draftInput = ""
 		m.vp.SetHeight(m.vpHeight())
-		return m, listenForEvent(m.eventCh)
+		return m, nil
 	}
 
 	if m.modal.visible {
@@ -224,23 +233,23 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k.Code == tea.KeyEscape {
 		if m.modal.visible {
 			m.modal.close()
-			return m, listenForEvent(m.eventCh)
+			return m, nil
 		}
 		if m.pickerOpen {
 			m.pickerOpen = false
 			m.vp.SetHeight(m.vpHeight())
-			return m, listenForEvent(m.eventCh)
+			return m, nil
 		}
 		if m.isRunning || m.isCompacting.Load() {
 			_, _ = m.client.Abort(context.Background(), &pb.AbortRequest{SessionId: m.sessionID})
 			m.cancel()
-			return m, listenForEvent(m.eventCh)
+			return m, nil
 		}
 		return m, nil
 	}
 
 	if m.isCompacting.Load() {
-		return m, listenForEvent(m.eventCh)
+		return m, nil
 	}
 
 	if key.Matches(msg, m.keys.Up) {
@@ -330,6 +339,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: err.Error()}}})
 			}
 		}
+		if m.isRunning {
+			return m, nil
+		}
 		return m, listenForEvent(m.eventCh)
 	}
 
@@ -354,7 +366,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			isBusy := m.isRunning || m.isCompacting.Load()
 			if isBusy && (cmd.name == "new" || cmd.name == "resume" || cmd.name == "import" || cmd.name == "tree" || cmd.name == "fork" || cmd.name == "clone" || cmd.name == "model" || cmd.name == "compact") {
 				m.history = append(m.history, historyEntry{role: "warning", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Cannot use /%s while agent is busy. Abort first with Esc.", cmd.name)}}})
-				return m.refreshViewport(), listenForEvent(m.eventCh)
+				return m.refreshViewport(), nil
 			}
 			result, err := handleSlashCommand(cmd, m.client, &m.sessionID, m.sessionMgr, m.config)
 			if err != nil {
@@ -406,12 +418,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 				if result.compact {
 					m.isCompacting.Store(true)
-					return m, tea.Batch(
+					m.history = append(m.history, historyEntry{
+						role: "compaction",
+						items: []contentItem{{
+							kind: contentItemText,
+							text: "Compacting context...",
+						}},
+					})
+					return m.refreshViewport(), tea.Batch(
 						m.spinner.Tick,
 						m.stopwatch.Reset(),
 						m.stopwatch.Start(),
 						m.compactCmd(),
-						listenForEvent(m.eventCh),
 					)
 				}
 				if result.quit {
@@ -450,11 +468,17 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					if promErr := m.promptGRPC(m.ctx, result.invokeToolArgs); promErr != nil {
 						m.history = append(m.history, historyEntry{role: "error", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Tool invocation failed: %v", promErr)}}})
 					}
-					return m, tea.Batch(append(cmds, listenForEvent(m.eventCh))...)
+					return m, tea.Batch(cmds...)
 				}
-				return m.refreshViewport(), tea.Batch(append(cmds, listenForEvent(m.eventCh))...)
+				if !m.isRunning {
+					cmds = append(cmds, listenForEvent(m.eventCh))
+				}
+				return m.refreshViewport(), tea.Batch(cmds...)
 			}
-			return m.refreshViewport(), listenForEvent(m.eventCh)
+			if !m.isRunning {
+				return m.refreshViewport(), listenForEvent(m.eventCh)
+			}
+			return m.refreshViewport(), nil
 		}
 
 		if strings.HasPrefix(raw, "!") {
@@ -470,7 +494,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.input.SetValue(bangResult.Output)
 				m.input.SetHeight(m.currentInputHeight())
 			}
-			return m.refreshViewport(), listenForEvent(m.eventCh)
+			if !m.isRunning {
+				return m.refreshViewport(), listenForEvent(m.eventCh)
+			}
+			return m.refreshViewport(), nil
 		}
 
 		entry := historyEntry{role: "user", items: []contentItem{{kind: contentItemText, text: raw}}}
@@ -493,6 +520,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.isRunning = false
 			}
 		}
+		if m.isRunning {
+			return m.refreshViewport(), nil
+		}
 		return m.refreshViewport(), listenForEvent(m.eventCh)
 	}
 
@@ -507,13 +537,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toolCallsExpanded = !m.toolCallsExpanded
 		m.chatContent = m.buildChatContent()
 		m.vp.SetContent(m.chatContent)
-		return m, listenForEvent(m.eventCh)
+		return m, nil
 	}
 
 	if key.Matches(msg, m.keys.CtrlP) && len(m.models) > 0 {
 		if m.isRunning {
 			m.history = append(m.history, historyEntry{role: "warning", items: []contentItem{{kind: contentItemText, text: "Cannot switch models while agent is running. Abort first with Esc."}}})
-			return m.refreshViewport(), listenForEvent(m.eventCh)
+			return m.refreshViewport(), nil
 		}
 		m.modal.openModelsModal(m.models, m.modelName, m.style)
 		return m, nil
@@ -595,7 +625,7 @@ func (m *model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Esc):
 		m.modal.close()
-		return m, listenForEvent(m.eventCh)
+		return m, nil
 
 	case key.Matches(msg, m.keys.Enter):
 		if m.modal.kind == modalTree {
@@ -658,7 +688,7 @@ func (m *model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.history = append(m.history, historyEntry{role: "info", items: []contentItem{{kind: contentItemText, text: fmt.Sprintf("Switched to model: %s (%s)", selected.name, selected.provider)}}})
 			}
-			return m.refreshViewport(), listenForEvent(m.eventCh)
+			return m.refreshViewport(), nil
 		}
 		if m.modal.kind == modalConfig && m.modal.form != nil {
 			nm, _ := m.modal.form.Update(msg)
@@ -765,7 +795,7 @@ func (m *model) handleModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		if len(keep)+len(squash) == 0 {
 			m.history = append(m.history, historyEntry{role: "system", items: []contentItem{{kind: contentItemText, text: "Rebase cancelled: no messages selected."}}})
-			return m.refreshViewport(), listenForEvent(m.eventCh)
+			return m.refreshViewport(), nil
 		}
 
 		return m, func() tea.Msg {

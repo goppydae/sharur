@@ -129,7 +129,12 @@ message MergeSessionRequest {
 }
 message GetSessionTreeRequest {
   string session_id = 1;
-  bool   global     = 2;
+  enum Scope {
+    SESSION = 0;
+    PROJECT = 1;
+    GLOBAL  = 2;
+  }
+  Scope scope = 2;
 }
 message FollowUpRequest {
   string session_id = 1;
@@ -260,7 +265,7 @@ message MessageStartEvent  {}
 message AgentEndEvent      {}
 message AbortEvent         {}
 message QueueUpdateEvent   {}
-message CompactEndEvent    {}
+message CompactEndEvent    { string message = 1; }
 
 message TextDeltaEvent     { string content = 1; }
 message ThinkingDeltaEvent { string content = 1; }

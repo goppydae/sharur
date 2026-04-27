@@ -66,40 +66,43 @@ A rich, Bubble Tea-powered TUI with real-time streaming, tool cards, session man
 | `Enter` | Send message (or **Steer** the running agent) |
 | `Shift+Enter` | Insert newline |
 | `Ctrl+Enter` | Queue **follow-up** message (runs after agent finishes) |
-| `Ctrl+C` | Abort the current agent run / clear input |
-| `Esc` | Cancel streaming / close modal |
+| `Ctrl+C` | Abort the current agent run and clear the input editor |
+| `Esc` | Cancel streaming / Close modal / Abort current turn |
 | `Ctrl+O` | Toggle tool call output expansion |
-| `Ctrl+P` | Cycle to the next model (from `--models` flag) |
-| `↑/↓` | Navigate prompt history (while in editor) |
+| `Ctrl+P` | Open model selection modal (cycling via `--models` flag) |
+| `↑/↓` | Navigate prompt history (if at start/end of editor) / Scroll viewport |
+| `?` | Show help modal |
 
 #### Slash Commands
 
 | Command | Description |
 |---|---|
 | `/new` | Start a fresh session |
-| `/resume <id>` | Resume a session by ID (supports fuzzy search) |
-| `/branch [msg#]` | Create a new child session branching from a specific message index (defaults to last) |
-| `/fork` | Duplicate current session into a new independent session |
-| `/rebase` | Interactive rebase: select a message to rewrite or branch from |
-| `/merge <id>` | Merge another session's history into the current one |
-| `/tree` | Open session tree — navigate, resume, or branch |
+| `/resume <id>` | Resume a session by ID or partial UUID (fuzzy search enabled) |
+| `/branch [idx]` | Create a new child session branching from a specific message index (defaults to last) |
+| `/fork` | Duplicate current session into a new independent session (no parent link) |
+| `/rebase` | Interactive rebase: select specific messages to keep in a new session |
+| `/merge <id>` | Merge another session's history into the current one with a synthesis turn |
+| `/tree [-g\|-p]` | Open session tree modal. Flags: `--global` (-g) or `--project` (-p) |
 | `/import <path>` | Import a session from a JSONL file |
 | `/export <path>` | Export the current session to a JSONL file |
-| `/model <provider/model>` | Switch model mid-conversation |
-| `/stats` | View session info and token usage |
-| `/config` | View active configuration |
-| `/context` | View context window usage |
-| `/compact` | Manually compact the context |
+| `/model <p/m>` | Switch model mid-conversation (e.g. `/model anthropic/claude-3-5-sonnet`) |
+| `/stats` | View session statistics and token usage |
+| `/config` | View and edit active configuration |
+| `/context` | View detailed context window usage |
+| `/compact` | Manually trigger a context compaction |
 | `/skill:<name> [args]` | Invoke a skill |
 | `/prompt:<name>` | Expand a prompt template into the editor |
-| `/exit` | Quit |
+| `/exit` | Quit (alias: `/quit`) |
 
-#### Session Tree (`/tree`)
+#### Session Tree Modal (`/tree`)
 
-- **↑/↓** — Navigate the tree
-- **Enter** — Resume the selected session
-- **B** — Branch (fork) from the selected session
-- **Esc** — Close
+- **↑/↓ / PgUp/PgDn** — Navigate the session list
+- **Enter** — Resume the selected session (or branch from it if it's an interior node)
+- **B** — Create a new **branch** from the selected session
+- **F** — Create an independent **fork** of the selected session
+- **R** — Start an interactive **rebase** from the selected session's history
+- **Esc** — Close modal
 
 #### Bang Commands
 

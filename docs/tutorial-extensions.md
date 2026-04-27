@@ -276,7 +276,7 @@ class TicketContextServicer(extension_pb2_grpc.ExtensionServicer):
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True
         ).strip()
         state = request.state or extension_pb2.AgentState()
-        state.system_prompt += f"\n\n<branch>Current branch: {branch}</branch>"
+        state.prompt += f"\n\n<branch>Current branch: {branch}</branch>"
         return extension_pb2.BeforePromptResponse(state=state)
 
     def BeforeToolCall(self, request, context):

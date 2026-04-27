@@ -330,10 +330,16 @@ func rootCmd() *cobra.Command {
  						sessionID = fresp.SessionId
  					}
  				case preloadSession == "continue":
- 					sessionID = mgr.LatestWithMessages()
- 					if sessionID == "" {
- 						fmt.Fprintln(os.Stderr, "warning: no sessions with content found to continue; starting a new session")
- 					}
+					var lerr error
+					sessionID, lerr = mgr.LatestWithMessages()
+					if lerr != nil {
+						fmt.Fprintf(os.Stderr, "warning: could not search for sessions to continue: %v\n", lerr)
+					}
+					if sessionID == "" {
+						if mode != "interactive" && mode != "tui" {
+							fmt.Fprintln(os.Stderr, "warning: no sessions with content found to continue; starting a new session")
+						}
+					}
  				case strings.HasPrefix(preloadSession, "resume:"):
  					sessionID = strings.TrimPrefix(preloadSession, "resume:")
  				case preloadSession != "" && preloadSession != "resume":
@@ -479,17 +485,14 @@ func runExport(cfg *config.Config, dest string, preloadSession string) error {
 		id := strings.TrimPrefix(preloadSession, "resume:")
 		sess, err = mgr.Load(id)
 	case preloadSession == "continue":
-		ids, lerr := mgr.List()
-		if lerr == nil && len(ids) > 0 {
-			id := ids[len(ids)-1]
-			sess, err = mgr.Load(id)
-			if err != nil {
-				if abs, err2 := filepath.Abs(id); err2 == nil {
-					sess, err = mgr.Load(abs)
-				}
-			}
+		id, lerr := mgr.LatestWithMessages()
+		if lerr != nil {
+			return fmt.Errorf("search for session to continue: %w", lerr)
 		}
-		if sess == nil && err == nil {
+		if id != "" {
+			sess, err = mgr.Load(id)
+		} else {
+			fmt.Fprintln(os.Stderr, "warning: no sessions with content found to continue")
 			err = fmt.Errorf("no sessions found to continue")
 		}
 	case preloadSession != "" && preloadSession != "resume":

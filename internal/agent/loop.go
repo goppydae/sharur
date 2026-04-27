@@ -231,7 +231,7 @@ func (a *Agent) consumeStream(ctx context.Context, stream <-chan *llm.Event) (st
 				if ev.Usage != nil {
 					usage = ev.Usage
 					a.events.Publish(Event{Type: EventMessageEnd, Usage: ev.Usage})
-					a.events.Publish(Event{Type: EventTokens, Value: int64(ev.Usage.TotalTokens)})
+					a.events.Publish(Event{Type: EventTokens, Value: int64(a.EstimateContextTokens())})
 				} else {
 					a.events.Publish(Event{Type: EventMessageEnd})
 				}

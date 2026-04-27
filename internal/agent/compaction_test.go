@@ -43,9 +43,9 @@ func newAgentWithMessages(msgs []Message, prov llm.Provider) *Agent {
 	return ag
 }
 
-// TestCompact_SummaryAppearsInHistory verifies that after compaction the history
-// contains the sentinel-prefixed summary message at the compaction boundary.
-func TestCompact_SummaryAppearsInHistory(t *testing.T) {
+// TestCompact_CompactionNoticeAppearsInHistory verifies that after compaction
+// the history contains a concise compaction notice instead of the full summary.
+func TestCompact_CompactionNoticeAppearsInHistory(t *testing.T) {
 	wantSummary := summarySentinel + "## Goal\nDo something\n"
 	prov := &summaryProvider{summaryText: wantSummary}
 
@@ -61,21 +61,32 @@ func TestCompact_SummaryAppearsInHistory(t *testing.T) {
 
 	got := ag.Messages()
 	if len(got) < 4 {
-		t.Errorf("expected at least 4 messages (3 original + 1 summary), got %d", len(got))
+		t.Errorf("expected at least 4 messages (3 original + 1 notice), got %d", len(got))
 	}
 	
-	foundSummary := false
+	foundNotice := false
 	for _, m := range got {
-		if strings.HasPrefix(m.Content, summarySentinel) {
-			foundSummary = true
-			if m.Role != "success" {
-				t.Errorf("summary message role = %q, want %q", m.Role, "success")
+		if m.Role == "compaction" {
+			foundNotice = true
+			if !strings.Contains(m.Content, "Freed") {
+				t.Errorf("compaction notice content = %q, want it to contain 'Freed'", m.Content)
 			}
 			break
 		}
 	}
-	if !foundSummary {
-		t.Error("compaction summary not found in history")
+	if !foundNotice {
+		t.Error("compaction notice not found in history")
+	}
+
+	// Verify notice is the last message
+	last := got[len(got)-1]
+	if last.Role != "compaction" {
+		t.Errorf("last message role = %s, want compaction", last.Role)
+	}
+
+	// Verify the actual summary is in LatestCompaction
+	if ag.state.LatestCompaction == nil || !strings.HasPrefix(ag.state.LatestCompaction.Summary, wantSummary) {
+		t.Errorf("summary not saved in LatestCompaction; got %v", ag.state.LatestCompaction)
 	}
 }
 
@@ -96,7 +107,7 @@ func TestCompact_ReducesLlmContextButPreservesHistory(t *testing.T) {
 	
 	historyCount := len(ag.Messages())
 	if historyCount <= before {
-		t.Errorf("expected history count to increase (original + summary), got %d <= %d", historyCount, before)
+		t.Errorf("expected history count to increase (original + notice), got %d <= %d", historyCount, before)
 	}
 
 	llmMsgs := ag.buildLlmMessages()
@@ -229,6 +240,12 @@ func TestCompact_UpdatesExistingSummary(t *testing.T) {
 		{Role: "user", Content: "continue", Timestamp: time.Now()},
 	}
 	ag := newAgentWithMessages(msgs, prov)
+	ag.mu.Lock()
+	ag.state.LatestCompaction = &types.CompactionState{
+		Summary:          existingSummary,
+		FirstKeptEntryID: msgs[1].ID, // The first message after the summary
+	}
+	ag.mu.Unlock()
 	ag.Compact(context.Background(), 512)
 
 	mu.Lock()

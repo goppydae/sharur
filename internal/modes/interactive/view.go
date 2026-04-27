@@ -406,6 +406,21 @@ func renderSkill(name, args, location, content string, chatW int, s Style, expan
 	return renderBox(rawLines, chatW, chatW, boxStyle, false)
 }
 
+func renderCompactionNotice(content string, chatW int, s Style) string {
+	bgColor := s.ToolRunningBgColor() // neutral tool-like color
+	boxStyle := lipgloss.NewStyle().Background(bgColor).PaddingLeft(2).PaddingRight(2)
+
+	var rawLines []string
+	header := "◌ Compaction"
+	if strings.Contains(content, "complete") {
+		header = "✓ Compaction"
+	}
+	rawLines = append(rawLines, s.ToolCall().Bold(true).Background(bgColor).Render(header))
+	rawLines = append(rawLines, s.Muted().Background(bgColor).Render(content))
+
+	return renderBox(rawLines, chatW, chatW, boxStyle, false)
+}
+
 func renderEntry(e historyEntry, s Style, chatW int, toolCallsExpanded bool) string {
 	msgW := int(float64(chatW) * msgWidthRatio)
 
@@ -454,6 +469,8 @@ func renderEntry(e historyEntry, s Style, chatW int, toolCallsExpanded bool) str
 				}
 				blank := noticeStyle.Width(chatW).Render("")
 				rendered = blank + "\n" + strings.Join(noticeLines, "\n") + "\n" + blank
+			case "compaction":
+				rendered = renderCompactionNotice(item.text, chatW, s)
 			default:
 				bgHex := s.AssistantBgHex()
 				rendered = wrapAndLeftAlign(renderMarkdown(item.text, msgW-4, bgHex, s.CodeBgHex()), chatW, msgW, s.AssistantBox())

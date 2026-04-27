@@ -315,12 +315,20 @@ func min8(n int) int {
 }
 
 func handleTreeCommand(client pb.AgentServiceClient, mgr *session.Manager, currentID string, arg string) (*slashResult, error) {
-	isGlobal := strings.Contains(arg, "--global") || strings.Contains(arg, "-g")
+	scope := pb.GetSessionTreeRequest_SESSION
+	mscope := session.ScopeSession
+	if strings.Contains(arg, "--global") || strings.Contains(arg, "-g") {
+		scope = pb.GetSessionTreeRequest_GLOBAL
+		mscope = session.ScopeGlobal
+	} else if strings.Contains(arg, "--project") || strings.Contains(arg, "-p") {
+		scope = pb.GetSessionTreeRequest_PROJECT
+		mscope = session.ScopeProject
+	}
 
 	// Prefer the gRPC session tree; fall back to local manager tree.
 	treeResp, err := client.GetSessionTree(context.Background(), &pb.GetSessionTreeRequest{
 		SessionId: currentID,
-		Global:    isGlobal,
+		Scope:     scope,
 	})
 	if err == nil {
 		nodes := buildFlatProtoNodes(treeResp.Roots)
@@ -335,7 +343,7 @@ func handleTreeCommand(client pb.AgentServiceClient, mgr *session.Manager, curre
 		}, nil
 	}
 	// Fallback: build from disk.
-	roots, berr := mgr.BuildTree(currentID, isGlobal)
+	roots, berr := mgr.BuildTree(currentID, mscope)
 	if berr != nil {
 		return nil, berr
 	}

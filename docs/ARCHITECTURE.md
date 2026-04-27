@@ -24,7 +24,8 @@ gollm/
 │   ├── events/         # Generic publish-subscribe event bus
 │   ├── skills/         # Skill discovery (Markdown files → slash commands)
 │   ├── prompts/        # Prompt template discovery
-│   └── contextfiles/   # Auto-discovered context file injection (AGENTS.md, etc.)
+│   ├── contextfiles/   # Auto-discovered context file injection (AGENTS.md, etc.)
+│   └── grpcserver/     # Compatibility wrapper for Service
 └── proto/              # Protobuf definitions (gollm/v1/agent.proto)
 └── extensions/         # gRPC extension loader + proto definitions
 ```
@@ -108,7 +109,11 @@ This means a `/resume <id>` command can switch to any session ever saved to disk
 
 ## Agent Lifecycle & Events
 
-The agent is driven by an **event-bus** (`internal/events`). Every meaningful state transition emits an `agent.Event` to all subscribers. The TUI and session saver each subscribe independently.
+The agent is driven by an **event-bus** (`internal/events`). Every meaningful state transition emits an `agent.Event` to all subscribers. 
+
+### EventBus Performance
+
+The EventBus is **async and non-blocking**. `Publish()` enqueues to a 4096-item buffered channel per subscriber and returns immediately — it never blocks the agent loop. Each subscriber runs in its own goroutine. Slow subscribers drop events to protect the agent loop from backpressure.
 
 ### Event Flow
 
@@ -222,12 +227,21 @@ Each `.jsonl` file contains one JSON object per line:
 Sessions form a **linked tree** via `parentId`. The `session.Manager.BuildTree()` method assembles all sessions from the project directory into a `[]*TreeNode` tree. `FlattenTree` produces a depth-first flat list with structured layout metadata (gutters, connectors, indentation), which the TUI layer uses to render a clean Unicode box-drawing tree diagram.
 
 ### Branching, Rebasing & Merging
-- **`/branch [index]`** — Creates a child session linked via `parentId`. If an index is provided, only messages up to that point are copied.
+- **`/branch [idx]`** — Creates a child session linked via `parentId`. If an index is provided, only messages up to that point are copied.
 - **`/fork`** — Duplicates a session with no parent link (independent snapshot).
-- **`/tree` → `B`** — Forks any session in the tree hierarchy on the fly.
-- **`/rebase`** — Interactive mode to select a point in history to branch from, allowing for "what-if" scenarios or cleaning up conversation loops.
-- **`/merge <id>`** — Append-only merge of another session's messages into the current context.
-- **`/compact`** — Manually triggers a context compaction to free up tokens while preserving essential history.
+- **`/tree`** — Interactive paginated tree with structured branch visualization; supports Resume (`Enter`), Branch (`B`), Fork (`F`), and Rebase (`R`).
+- **`/rebase`** — Interactive mode to select specific messages to keep in a new session, allowing for "what-if" scenarios or cleaning up conversation loops.
+- **`/merge <id>`** — Append-only merge of another session's history into the current context with a synthesis turn.
+
+### Compaction & Context Management
+
+To stay within LLM context windows, `gollm` implements a sophisticated auto-compaction strategy:
+
+1. **Trigger**: When `tokens > ContextWindow - ReserveTokens`, compaction is triggered.
+2. **Summarization**: The agent uses the LLM to generate a structured summary (`<!-- gollm-summary -->`) of the pruned messages.
+3. **File Tracking**: The compaction process extracts and carries forward lists of files read and modified, ensuring the assistant maintains context of what it has already seen or changed.
+4. **Split Turn Handling**: If compaction cuts mid-turn, it generates a "Turn Prefix Summary" to preserve context for the remaining part of the turn.
+5. **Session Tree Integration**: Compaction events are recorded as `TypeCompaction` records in the session tree, allowing them to be visualized and preserved across restarts.
 
 ---
 

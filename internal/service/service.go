@@ -767,7 +767,15 @@ func (s *Service) GetSessionTree(_ context.Context, req *pb.GetSessionTreeReques
 		}
 	}
 
-	roots, err := s.manager.BuildTree(currentLeaf, req.Global)
+	scope := session.ScopeSession
+	switch req.Scope {
+	case pb.GetSessionTreeRequest_PROJECT:
+		scope = session.ScopeProject
+	case pb.GetSessionTreeRequest_GLOBAL:
+		scope = session.ScopeGlobal
+	}
+
+	roots, err := s.manager.BuildTree(currentLeaf, scope)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "build tree: %v", err)
 	}
@@ -977,7 +985,7 @@ func eventToProto(sessionID string, ev agent.Event) *pb.AgentEvent {
 	case agent.EventCompactStart:
 		out.Payload = &pb.AgentEvent_CompactStart{CompactStart: &pb.CompactStartEvent{Message: ev.Content}}
 	case agent.EventCompactEnd:
-		out.Payload = &pb.AgentEvent_CompactEnd{CompactEnd: &pb.CompactEndEvent{}}
+		out.Payload = &pb.AgentEvent_CompactEnd{CompactEnd: &pb.CompactEndEvent{Message: ev.Content}}
 	case agent.EventQueueUpdate:
 		out.Payload = &pb.AgentEvent_QueueUpdate{QueueUpdate: &pb.QueueUpdateEvent{}}
 	default:
