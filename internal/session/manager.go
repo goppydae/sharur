@@ -667,6 +667,7 @@ func (m *Manager) BranchAt(source *Session, leafID string) (*Session, error) {
 	// Add root header
 	for _, r := range source.Records {
 		if r.Type == TypeSession {
+			r.ID = newID
 			r.ParentSession = ptr(source.ID)
 			records = append(records, r)
 			break

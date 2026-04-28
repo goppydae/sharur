@@ -39,6 +39,13 @@ func TestRead(t *testing.T) {
 	if !strings.Contains(result.Content, "line1") {
 		t.Errorf("expected 'line1' in output, got: %s", result.Content)
 	}
+
+	// Test read missing file
+	args, _ = json.Marshal(map[string]any{"path": "non-existent.txt"})
+	result, err = tool.Execute(context.Background(), args, nil)
+	if err == nil && !result.IsError {
+		t.Error("expected error for non-existent file, got nil")
+	}
 }
 
 func TestWrite(t *testing.T) {
@@ -151,6 +158,13 @@ func TestLs(t *testing.T) {
 	if !strings.Contains(result.Content, "b.txt") {
 		t.Errorf("expected 'b.txt' in output, got: %s", result.Content)
 	}
+
+	// Test ls missing dir
+	args, _ = json.Marshal(map[string]any{"path": filepath.Join(tmpDir, "missing")})
+	result, err = tool.Execute(context.Background(), args, nil)
+	if err == nil && !result.IsError {
+		t.Error("expected error for missing directory, got nil")
+	}
 }
 
 func TestGrep(t *testing.T) {
@@ -200,6 +214,13 @@ func TestFind(t *testing.T) {
 	}
 	if strings.Contains(result.Content, "c.txt") {
 		t.Errorf("expected no .txt files, got: %s", result.Content)
+	}
+
+	// Test find missing path
+	args, _ = json.Marshal(map[string]any{"path": "/non/existent/path"})
+	result, err = tool.Execute(context.Background(), args, nil)
+	if err == nil && !result.IsError {
+		t.Error("expected error for missing path, got nil")
 	}
 }
 

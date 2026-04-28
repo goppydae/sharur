@@ -197,3 +197,102 @@ func TestManager_ToTypes(t *testing.T) {
 	}
 }
 
+func TestManager_List(t *testing.T) {
+	mgr := newTestManager(t)
+
+	s1, _ := mgr.Create()
+	_, _ = mgr.AppendMessage(s1, types.Message{Role: "user", Content: "sess 1"})
+
+	s2, _ := mgr.Create()
+	_, _ = mgr.AppendMessage(s2, types.Message{Role: "user", Content: "sess 2"})
+
+	ids, err := mgr.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	if len(ids) != 2 {
+		t.Errorf("expected 2 sessions, got %d", len(ids))
+	}
+
+	found1 := false
+	found2 := false
+	for _, id := range ids {
+		if id == s1.ID {
+			found1 = true
+		}
+		if id == s2.ID {
+			found2 = true
+		}
+	}
+	if !found1 || !found2 {
+		t.Errorf("expected sessions not found in list: found1=%v, found2=%v", found1, found2)
+	}
+}
+
+func TestManager_Delete(t *testing.T) {
+	mgr := newTestManager(t)
+
+	s1, _ := mgr.Create()
+	_, _ = mgr.AppendMessage(s1, types.Message{Role: "user", Content: "sess 1"})
+
+	if err := mgr.Delete(s1.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	ids, _ := mgr.List()
+	if len(ids) != 0 {
+		t.Errorf("expected 0 sessions after delete, got %d", len(ids))
+	}
+}
+
+func TestManager_AppendThinkingLevelChange(t *testing.T) {
+	mgr := newTestManager(t)
+	sess, _ := mgr.Create()
+
+	if err := mgr.AppendThinkingLevelChange(sess, "high"); err != nil {
+		t.Fatalf("AppendThinkingLevelChange: %v", err)
+	}
+
+	loaded, _ := mgr.Load(sess.ID)
+	if loaded.Thinking != "high" {
+		t.Errorf("expected thinking level high, got %s", loaded.Thinking)
+	}
+}
+
+func TestManager_AppendCompaction(t *testing.T) {
+	mgr := newTestManager(t)
+	sess, _ := mgr.Create()
+	m1ID, _ := mgr.AppendMessage(sess, types.Message{Role: "user", Content: "m1"})
+	_, _ = mgr.AppendMessage(sess, types.Message{Role: "assistant", Content: "m2"})
+
+	if err := mgr.AppendCompaction(sess, "summary", m1ID, 100, 50); err != nil {
+		t.Fatalf("AppendCompaction: %v", err)
+	}
+
+	loaded, _ := mgr.Load(sess.ID)
+	if loaded.LatestCompaction == nil {
+		t.Fatal("expected LatestCompaction to be set")
+	}
+	if loaded.LatestCompaction.Summary != "summary" {
+		t.Errorf("expected summary 'summary', got %s", loaded.LatestCompaction.Summary)
+	}
+	if loaded.LatestCompaction.FirstKeptEntryID != m1ID {
+		t.Errorf("expected FirstKeptEntryID %s, got %s", m1ID, loaded.LatestCompaction.FirstKeptEntryID)
+	}
+}
+
+func TestManager_AppendSessionInfo(t *testing.T) {
+	mgr := newTestManager(t)
+	sess, _ := mgr.Create()
+
+	if err := mgr.AppendSessionInfo(sess, "test name"); err != nil {
+		t.Fatalf("AppendSessionInfo: %v", err)
+	}
+
+	loaded, _ := mgr.Load(sess.ID)
+	if loaded.Name != "test name" {
+		t.Errorf("expected session name 'test name', got %s", loaded.Name)
+	}
+}
+

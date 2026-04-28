@@ -1,0 +1,25 @@
+mode: set
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:22.37,23.16 1 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:23.16,25.3 1 0
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:26.2,27.16 2 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:27.16,29.3 1 0
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:31.2,35.6 4 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:35.6,38.35 3 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:38.35,39.9 1 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:42.3,42.64 1 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:42.64,43.9 1 0
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:45.3,45.15 1 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:48.2,50.25 3 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:50.25,51.41 1 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:51.41,53.15 2 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:53.15,54.13 1 0
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:56.4,56.40 1 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:56.40,59.5 2 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:62.2,62.14 1 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:67.31,69.21 2 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:69.21,71.3 1 0
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:72.2,73.26 2 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:73.26,75.17 2 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:75.17,76.12 1 0
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:78.3,81.17 4 1
+github.com/goppydae/gollm/internal/contextfiles/contextfiles.go:83.2,83.39 1 1

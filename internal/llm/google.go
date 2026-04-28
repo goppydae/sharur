@@ -14,6 +14,7 @@ import (
 // GoogleProvider implements the Provider interface for Google Gemini APIs.
 type GoogleProvider struct {
 	client    *http.Client
+	baseURL   string
 	apiKey    string
 	model     string
 	maxTokens int
@@ -24,11 +25,18 @@ type GoogleProvider struct {
 func NewGoogleProvider(apiKey, model string) *GoogleProvider {
 	return &GoogleProvider{
 		client:    &http.Client{Timeout: 5 * time.Minute},
+		baseURL:   "https://generativelanguage.googleapis.com",
 		apiKey:    apiKey,
 		model:     model,
 		maxTokens: 4096,
 		temp:      0.7,
 	}
+}
+
+// WithBaseURL sets a custom base URL (useful for testing).
+func (p *GoogleProvider) WithBaseURL(url string) *GoogleProvider {
+	p.baseURL = strings.TrimRight(url, "/")
+	return p
 }
 
 func (p *GoogleProvider) Info() ProviderInfo {
@@ -57,7 +65,7 @@ func (p *GoogleProvider) Stream(ctx context.Context, req *CompletionRequest) (<-
 }
 
 func (p *GoogleProvider) stream(ctx context.Context, req *CompletionRequest, ch chan<- *Event) error {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent", p.model)
+	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent", p.baseURL, p.model)
 
 	body := p.convertRequest(req)
 	data, err := json.Marshal(body)
@@ -256,7 +264,7 @@ func (p *GoogleProvider) convertRequest(req *CompletionRequest) map[string]any {
 }
 
 func (p *GoogleProvider) ListModels() ([]string, error) {
-	url := "https://generativelanguage.googleapis.com/v1beta/models"
+	url := p.baseURL + "/v1beta/models"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

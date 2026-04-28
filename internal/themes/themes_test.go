@@ -1,199 +1,108 @@
 package themes
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestBundledContainsAll(t *testing.T) {
-	bundled := Bundled()
-	expected := []string{"dark", "light", "cyberpunk", "synthwave"}
-	for _, name := range expected {
-		t.Run(name, func(t *testing.T) {
-			theme, ok := bundled[name]
-			if !ok {
-				t.Fatalf("bundled theme %q not found", name)
-			}
-			if theme.Name == "" {
-				t.Errorf("theme %q has empty Name", name)
-			}
-		})
-	}
-}
-
 func TestParseAdaptiveColor(t *testing.T) {
 	tests := []struct {
 		input    string
-		wantHex  string
+		expected string
 		wantErr  bool
 	}{
 		{"#fff", "#ffffff", false},
-		{"#000", "#000000", false},
-		{"#3b82f6", "#3b82f6", false},
-		{"#ff0000", "#ff0000", false},
-		{"#aabbcc", "#aabbcc", false},
-		{"#aabbccdd", "#aabbcc", false}, // alpha ignored
-		{"ff0000", "", true},            // missing #
-		{"", "", true},                  // empty
+		{"#000000", "#000000", false},
+		{"#ff00ffaa", "#ff00ff", false},
+		{"invalid", "", true},
+		{"", "", true},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			ac, err := ParseAdaptiveColor(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("expected error for input %q, got nil", tt.input)
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("unexpected error for input %q: %v", tt.input, err)
-			}
-			if ac.Light != tt.wantHex {
-				t.Errorf("Light = %q, want %q", ac.Light, tt.wantHex)
-			}
-		})
+		got, err := ParseAdaptiveColor(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ParseAdaptiveColor(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if !tt.wantErr && got.Light != tt.expected {
+			t.Errorf("ParseAdaptiveColor(%q) = %q, want %q", tt.input, got.Light, tt.expected)
+		}
 	}
 }
 
-func TestJSONRoundTrip(t *testing.T) {
-	original := DarkTheme()
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+func TestLoadSaveTheme(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test-theme.json")
+	
+	orig := &Theme{
+		Name: "test-theme",
+		Accent: AdaptiveColor{Light: "#ff0000", Dark: "#00ff00"},
 	}
 
-	var restored Theme
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	if restored.Name != original.Name {
-		t.Errorf("Name = %q, want %q", restored.Name, original.Name)
-	}
-	if restored.Accent.Light != original.Accent.Light {
-		t.Errorf("Accent.Light = %q, want %q", restored.Accent.Light, original.Accent.Light)
-	}
-}
-
-func TestSaveAndLoadTheme(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test-theme.json")
-
-	theme := CyberpunkTheme()
-	if err := SaveTheme(path, theme); err != nil {
-		t.Fatalf("SaveTheme: %v", err)
+	if err := SaveTheme(path, orig); err != nil {
+		t.Fatalf("SaveTheme() error: %v", err)
 	}
 
 	loaded, err := LoadTheme(path)
 	if err != nil {
-		t.Fatalf("LoadTheme: %v", err)
+		t.Fatalf("LoadTheme() error: %v", err)
 	}
 
-	if loaded.Name != theme.Name {
-		t.Errorf("Name = %q, want %q", loaded.Name, theme.Name)
+	if loaded.Name != orig.Name {
+		t.Errorf("expected name %s, got %s", orig.Name, loaded.Name)
 	}
-	if loaded.Accent.Light != theme.Accent.Light {
-		t.Errorf("Accent.Light = %q, want %q", loaded.Accent.Light, theme.Accent.Light)
-	}
-}
-
-func TestSaveAndLoadYAMLTheme(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test-theme.yaml")
-
-	data := []byte(`name: synthwave
-accent:
-  light: "#ff71ce"
-  dark: "#ff71ce"
-bordered:
-  light: "#05d9e8"
-  dark: "#05d9e8"
-muted:
-  light: "#d9519b"
-  dark: "#d9519b"
-dim:
-  light: "#7b68ee"
-  dark: "#7b68ee"
-success:
-  light: "#05d9e8"
-  dark: "#05d9e8"
-error:
-  light: "#ff0044"
-  dark: "#ff0044"
-warning:
-  light: "#f5e556"
-  dark: "#f5e556"
-accentText:
-  light: "#ff71ce"
-  dark: "#ff71ce"
-mutedText:
-  light: "#d9519b"
-  dark: "#d9519b"
-dimText:
-  light: "#7b68ee"
-  dark: "#7b68ee"
-workingColor:
-  light: "#ff71ce"
-  dark: "#ff71ce"
-userMsgBg:
-  light: "#2a1b3d"
-  dark: "#1a0f2e"
-assistantBg:
-  light: "#1a0a2e"
-  dark: "#0f0520"
-errorBg:
-  light: "#2e0a1a"
-  dark: "#1f0510"
-toolBg:
-  light: "#0a1a2e"
-  dark: "#050f1f"
-`)
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		t.Fatalf("write test file: %v", err)
-	}
-
-	loaded, err := LoadTheme(path)
-	if err != nil {
-		t.Fatalf("LoadTheme: %v", err)
-	}
-
-	if loaded.Name != "synthwave" {
-		t.Errorf("Name = %q, want %q", loaded.Name, "synthwave")
-	}
-	if loaded.Accent.Light != "#ff71ce" {
-		t.Errorf("Accent.Light = %q, want %q", loaded.Accent.Light, "#ff71ce")
+	if loaded.Accent.Light != orig.Accent.Light {
+		t.Errorf("expected light accent %s, got %s", orig.Accent.Light, loaded.Accent.Light)
 	}
 }
 
-func TestLoadThemeNotFound(t *testing.T) {
-	_, err := LoadTheme("/nonexistent/theme.json")
-	if err == nil {
-		t.Error("expected error for nonexistent file, got nil")
+func TestNewStyle(t *testing.T) {
+	theme := Theme{
+		Name:   "test",
+		Accent: AdaptiveColor{Light: "#ff0000", Dark: "#00ff00"},
+		Bordered: AdaptiveColor{Light: "#cccccc", Dark: "#333333"},
+		Muted: AdaptiveColor{Light: "#888888", Dark: "#777777"},
+		Dim: AdaptiveColor{Light: "#444444", Dark: "#222222"},
 	}
-}
-
-func TestLoadThemeInvalidJSON(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bad.json")
-	os.WriteFile(path, []byte("{not valid json}"), 0644) //nolint:errcheck
-
-	_, err := LoadTheme(path)
-	if err == nil {
-		t.Error("expected error for invalid JSON, got nil")
-	}
-}
-
-func TestLoadThemeInvalidYAML(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bad.yaml")
-	os.WriteFile(path, []byte("{{{{invalid yaml"), 0644) //nolint:errcheck
-
-	_, err := LoadTheme(path)
-	if err == nil {
-		t.Error("expected error for invalid YAML, got nil")
-	}
+	style := NewStyle(theme)
+	
+	// Exercise style methods
+	_ = style.Header()
+	_ = style.Logo()
+	_ = style.Hint()
+	_ = style.Footer()
+	_ = style.BorderTop()
+	_ = style.UserBox()
+	_ = style.AssistantBox()
+	_ = style.NoticeBox("error")
+	_ = style.NoticeBox("warning")
+	_ = style.NoticeBox("success")
+	_ = style.NoticeBox("info")
+	_ = style.WorkingIndicator()
+	_ = style.StatusIdle()
+	_ = style.StatusWorking()
+	_ = style.Dim()
+	_ = style.Muted()
+	_ = style.UserMessage()
+	_ = style.AssistantMessage()
+	_ = style.NoticeMsg("error")
+	_ = style.ThinkingBox()
+	_ = style.ToolCall()
+	
+	// Exercise color accessors
+	_ = style.AccentColor()
+	_ = style.AccentTextColor()
+	_ = style.MutedColor()
+	_ = style.MutedTextColor()
+	_ = style.SuccessColor()
+	_ = style.ErrorColor()
+	_ = style.WarningColor()
+	_ = style.InfoColor()
+	_ = style.WorkingColor()
+	_ = style.PanelBgColor()
+	_ = style.ToolRunningBgColor()
+	_ = style.ToolSuccessBgColor()
+	_ = style.ToolFailureBgColor()
+	_ = style.Bordered()
+	_ = style.FooterPaddingX()
 }

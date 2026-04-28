@@ -106,6 +106,9 @@ func (m *Manager) BuildTree(currentID string, scope TreeScope) ([]*TreeNode, err
 						node.Name = r.ID[:8]
 					}
 					node.Role = "session"
+					if r.ParentSession != nil {
+						node.ParentID = r.ParentSession
+					}
 					// Map the fileID to this node as well, so we can find it by filename.
 					byID[strings.TrimSpace(strings.ToLower(fileID))] = node
 				case TypeSessionInfo:
