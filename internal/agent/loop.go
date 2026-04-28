@@ -16,6 +16,7 @@ func (a *Agent) runTurn(ctx context.Context) {
 	defer func() {
 		_ = a.lifeState.Transition(StateIdle)
 		a.events.Publish(Event{Type: EventAgentEnd})
+		a.runExtensionHook(ctx, func(ext Extension) { ext.AgentEnd(ctx) }, "AgentEnd")
 		a.closeDone()
 	}()
 
@@ -82,7 +83,24 @@ func (a *Agent) runTurn(ctx context.Context) {
 
 		req := a.buildRequest()
 		a.events.Publish(Event{Type: EventTurnStart})
+		a.runExtensionHook(ctx, func(ext Extension) { ext.TurnStart(ctx) }, "TurnStart")
 		a.events.Publish(Event{Type: EventTokens, Value: int64(a.EstimateContextTokens())})
+
+		// Allow extensions to modify the provider request before it is sent.
+		a.mu.RLock()
+		for _, ext := range a.extensions {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						a.events.Publish(Event{Type: EventError, Error: fmt.Errorf("extension BeforeProviderRequest panic: %v", r)})
+					}
+				}()
+				if next := ext.BeforeProviderRequest(ctx, req); next != nil {
+					req = next
+				}
+			}()
+		}
+		a.mu.RUnlock()
 
 		stream, err := a.provider.Stream(ctx, req)
 		if err != nil {
@@ -97,6 +115,8 @@ func (a *Agent) runTurn(ctx context.Context) {
 		if !ok {
 			return
 		}
+
+		a.runExtensionHook(ctx, func(ext Extension) { ext.AfterProviderResponse(ctx, content, len(llmCalls)) }, "AfterProviderResponse")
 
 		// Append assistant message with any tool calls
 		assistantMsg := types.Message{Role: "assistant", Content: content, Thinking: thinking, Usage: usage}
@@ -123,7 +143,25 @@ func (a *Agent) runTurn(ctx context.Context) {
 		if !a.runToolCalls(ctx, llmCalls) {
 			return
 		}
+		a.runExtensionHook(ctx, func(ext Extension) { ext.TurnEnd(ctx) }, "TurnEnd")
 		// Loop: send tool results back to the LLM for the next turn.
+	}
+}
+
+// runExtensionHook calls fn for each extension, recovering panics and publishing an error event.
+func (a *Agent) runExtensionHook(ctx context.Context, fn func(Extension), hookName string) {
+	a.mu.RLock()
+	exts := a.extensions
+	a.mu.RUnlock()
+	for _, ext := range exts {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					a.events.Publish(Event{Type: EventError, Error: fmt.Errorf("extension %s panic: %v", hookName, r)})
+				}
+			}()
+			fn(ext)
+		}()
 	}
 }
 
@@ -160,6 +198,21 @@ func (a *Agent) buildRequest() *llm.CompletionRequest {
 	defer a.mu.RUnlock()
 
 	msgs := a.buildLlmMessagesNoLock()
+
+	// Allow extensions to transform the message slice before it reaches the LLM.
+	for _, ext := range a.extensions {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					a.events.Publish(Event{Type: EventError, Error: fmt.Errorf("extension ModifyContext panic: %v", r)})
+				}
+			}()
+			if next := ext.ModifyContext(context.Background(), msgs); next != nil {
+				msgs = next
+			}
+		}()
+	}
+
 	req := &llm.CompletionRequest{
 		Model:       a.state.Model,
 		Messages:    msgs,

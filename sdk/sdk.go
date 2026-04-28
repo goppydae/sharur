@@ -72,6 +72,39 @@ const (
 	EventAbort        = agent.EventAbort
 )
 
+// InputAction controls how ModifyInput's result is applied.
+type InputAction = agent.InputAction
+
+const (
+	InputContinue  InputAction = agent.InputContinue
+	InputTransform InputAction = agent.InputTransform
+	InputHandled   InputAction = agent.InputHandled
+)
+
+// InputResult is returned by ModifyInput.
+type InputResult = agent.InputResult
+
+// CompactionPrep describes the state passed to BeforeCompact.
+type CompactionPrep = agent.CompactionPrep
+
+// CompactionResult can be returned by BeforeCompact to provide a custom summary.
+type CompactionResult = agent.CompactionResult
+
+// SessionStartReason identifies why a session is starting.
+type SessionStartReason = agent.SessionStartReason
+
+const (
+	SessionStartNew    SessionStartReason = agent.SessionStartNew
+	SessionStartResume SessionStartReason = agent.SessionStartResume
+)
+
+// SessionEndReason identifies why a session is ending.
+type SessionEndReason = agent.SessionEndReason
+
+const (
+	SessionEndReset SessionEndReason = agent.SessionEndReset
+)
+
 // Config holds the options for creating a new agent.
 type Config struct {
 	// Provider selects the LLM backend: "ollama" (default), "openai", or "anthropic".

@@ -71,7 +71,7 @@ A rich, Bubble Tea-powered TUI with real-time streaming, tool cards, session man
 | `Ctrl+O` | Toggle tool call output expansion |
 | `Ctrl+P` | Open model selection modal (cycling via `--models` flag) |
 | `↑/↓` | Navigate prompt history (if at start/end of editor) / Scroll viewport |
-| `?` | Show help modal |
+| `F1` | Show help modal |
 
 #### Slash Commands
 
@@ -191,7 +191,7 @@ Store reusable prompts in `.gollm/prompts/` or `~/.gollm/prompts/`. Expand into 
 
 ### gRPC Extensions
 
-`gollm` supports out-of-process extensions over gRPC using [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin). Extensions run as separate binaries and communicate with the agent via a well-defined protocol.
+`gollm` supports out-of-process extensions over gRPC. Extensions run as separate binaries; gollm manages their lifecycle and passes a Unix socket path via `GOLLM_SOCKET_PATH` for the extension to listen on.
 
 Load an extension binary with the `--extension` flag (repeatable):
 
@@ -206,12 +206,7 @@ Import only `github.com/goppydae/gollm/extensions` — no internal packages requ
 ```go
 package main
 
-import (
-    "os"
-
-    goplugin "github.com/hashicorp/go-plugin"
-    "github.com/goppydae/gollm/extensions"
-)
+import "github.com/goppydae/gollm/extensions"
 
 type myPlugin struct {
     extensions.NoopPlugin // provides no-op defaults for all hooks
@@ -222,31 +217,58 @@ func (p *myPlugin) ModifySystemPrompt(prompt string) string {
 }
 
 func main() {
-    goplugin.Serve(&goplugin.ServeConfig{
-        HandshakeConfig: extensions.HandshakeConfig,
-        Plugins: goplugin.PluginSet{
-            "extension": &extensions.ExtensionPlugin{Impl: &myPlugin{
-                NoopPlugin: extensions.NoopPlugin{NameStr: "haiku"},
-            }},
-        },
-        GRPCServer: goplugin.DefaultGRPCServer,
+    extensions.Serve(&myPlugin{
+        NoopPlugin: extensions.NoopPlugin{NameStr: "haiku"},
     })
 }
 ```
 
 #### Plugin Interface
 
+**Load-time hooks** (called once when the extension is connected):
+
+| Method | Purpose |
+|---|---|
+| `Name()` | Returns the extension's unique identifier |
+| `Tools()` | Contributes additional tools to the agent |
+| `ExecuteTool()` | Executes a tool provided by this extension |
+
+**Session lifecycle hooks**:
+
 | Method | When called | Purpose |
 |---|---|---|
-| `Name()` | On load | Returns the extension's unique identifier |
-| `Tools()` | On load | Contributes additional tools to the agent |
-| `ExecuteTool()` | On tool call | Executes a tool provided by this extension |
-| `ModifySystemPrompt()` | Before each turn | Augments or replaces the system prompt |
-| `BeforePrompt()` | Before each LLM request | Modifies model, provider, or system state |
+| `SessionStart()` | Session attached or first prompt | Initialization, open connections |
+| `SessionEnd()` | Session reset | Cleanup, flush state |
+
+**Agent loop hooks**:
+
+| Method | When called | Purpose |
+|---|---|---|
+| `AgentStart()` | User prompt received, loop begins | Per-prompt setup |
+| `AgentEnd()` | Agent loop completes | Per-prompt teardown |
+| `TurnStart()` | Start of each LLM request turn | Per-turn metrics, logging |
+| `TurnEnd()` | After each turn's tool calls finish | Per-turn cleanup |
+
+**Transformation hooks** (return modified values):
+
+| Method | When called | Purpose |
+|---|---|---|
+| `ModifyInput()` | Before user text hits the transcript | Transform or consume user input |
+| `ModifySystemPrompt()` | Before each LLM request | Augment the system prompt |
+| `BeforePrompt()` | Before each LLM request | Modify model, provider, thinking level |
+| `ModifyContext()` | Before each LLM request is built | Filter or inject messages sent to the LLM |
+| `BeforeProviderRequest()` | Just before the request is sent | Modify temperature, max tokens, tools list |
+| `AfterProviderResponse()` | After LLM stream consumed | Observe response content and tool call count |
 | `BeforeToolCall()` | Before each tool execution | **Intercept or block tool calls** |
 | `AfterToolCall()` | After each tool execution | Modify or observe tool results |
+| `BeforeCompact()` | Before LLM-based summarization | **Provide a custom compaction summary** |
+| `AfterCompact()` | After compaction completes | Observe freed token count |
 
-`BeforeToolCall` is the interception point: return `(result, true)` to prevent the tool from running and substitute your own result; return `(ToolResult{}, false)` to allow normal execution.
+Key behaviors:
+- `ModifyInput` returns an `InputResult` with action `continue` (pass through), `transform` (replace text), or `handled` (consume without processing).
+- `ModifyContext` receives and returns the full message slice that will be sent to the LLM — changes do not affect the stored transcript.
+- `BeforeCompact` returns `nil` to let the default LLM summarization run, or a `*CompactionResult` to supply a custom summary and skip the LLM call entirely.
+- `BeforeToolCall` returns `(result, true)` to intercept, or `(ToolResult{}, false)` to allow normal execution.
 
 #### Example: Sandbox Extension
 
@@ -383,6 +405,23 @@ ag.Subscribe(func(e sdk.Event) {
 
 ag.Prompt(context.Background(), "List the Go files in this directory")
 <-ag.Idle()
+```
+
+Extensions are attached via `ag.SetExtensions()`. Use `sdk.NoopExtension` (aliased from `agent.NoopExtension`) as a base and override only the hooks you need:
+
+```go
+type loggingExt struct{ agent.NoopExtension }
+
+func (e *loggingExt) AgentStart(ctx context.Context) { log.Println("agent started") }
+func (e *loggingExt) AgentEnd(ctx context.Context)   { log.Println("agent finished") }
+func (e *loggingExt) ModifyInput(ctx context.Context, text string) sdk.InputResult {
+    if text == "quit" {
+        return sdk.InputResult{Action: sdk.InputHandled} // consume without processing
+    }
+    return sdk.InputResult{Action: sdk.InputContinue}
+}
+
+ag.SetExtensions([]sdk.Extension{&loggingExt{NoopExtension: agent.NoopExtension{NameStr: "logger"}}})
 ```
 
 ---

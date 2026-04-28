@@ -13,7 +13,6 @@ package main
 import (
 	"os"
 
-	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/goppydae/gollm/extensions"
 )
 
@@ -26,11 +25,5 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: extensions.HandshakeConfig,
-		Plugins: goplugin.PluginSet{
-			"extension": &extensions.ExtensionPlugin{Impl: ext},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
-	})
+	extensions.Serve(ext)
 }

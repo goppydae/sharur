@@ -5,53 +5,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/rpc"
+	"net"
+	"os"
 	"time"
 
-	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
 	proto "github.com/goppydae/gollm/extensions/gen"
 	"github.com/goppydae/gollm/internal/agent"
+	"github.com/goppydae/gollm/internal/llm"
 	"github.com/goppydae/gollm/internal/tools"
+	"github.com/goppydae/gollm/internal/types"
 )
 
 const extensionRPCTimeout = 5 * time.Second
 
-// HandshakeConfig is the agreed upon handshake for gollm extensions.
-var HandshakeConfig = plugin.HandshakeConfig{
-	ProtocolVersion:  1,
-	MagicCookieKey:   "GOLLM_EXTENSION",
-	MagicCookieValue: "v1.0.0",
-}
-
-// PluginMap is the map of plugins we can dispense.
-var PluginMap = map[string]plugin.Plugin{
-	"extension": &ExtensionPlugin{},
-}
-
-// ExtensionPlugin is the implementation of plugin.Plugin so we can serve/consume this
-// with hashicorp/go-plugin.
-type ExtensionPlugin struct {
-	// Impl is set only on the server side (inside the plugin binary).
-	Impl Plugin
-}
-
-func (p *ExtensionPlugin) Server(*plugin.MuxBroker) (interface{}, error) {
-	return &GRPCServer{Impl: p.Impl}, nil
-}
-
-func (p *ExtensionPlugin) Client(b *plugin.MuxBroker, c *rpc.Client) (interface{}, error) {
-	return nil, nil // We only use gRPC
-}
-
-func (p *ExtensionPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
-	proto.RegisterExtensionServer(s, &GRPCServer{Impl: p.Impl})
-	return nil
-}
-
-func (p *ExtensionPlugin) GRPCClient(ctx context.Context, broker *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	return &GRPCClient{client: proto.NewExtensionClient(c)}, nil
+// Serve starts a gRPC server on the Unix socket path provided via GOLLM_SOCKET_PATH.
+// This is the entry point for extension binaries.
+func Serve(impl Plugin) {
+	socketPath := os.Getenv("GOLLM_SOCKET_PATH")
+	if socketPath == "" {
+		log.Fatal("extensions.Serve: GOLLM_SOCKET_PATH environment variable not set")
+	}
+	lis, err := net.Listen("unix", socketPath)
+	if err != nil {
+		log.Fatalf("extensions.Serve: listen %s: %v", socketPath, err)
+	}
+	s := grpc.NewServer()
+	proto.RegisterExtensionServer(s, &GRPCServer{Impl: impl})
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("extensions.Serve: serve: %v", err)
+	}
 }
 
 // GRPCClient is an implementation of agent.Extension that talks over RPC.
@@ -208,6 +192,150 @@ func (m *GRPCClient) ModifySystemPrompt(prompt string) string {
 	return resp.ModifiedPrompt
 }
 
+func (m *GRPCClient) SessionStart(ctx context.Context, sessionID string, reason agent.SessionStartReason) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.SessionStart(rpcCtx, &proto.SessionStartRequest{SessionId: sessionID, Reason: string(reason)}); err != nil {
+		log.Printf("extension SessionStart() RPC error: %v", err)
+	}
+}
+
+func (m *GRPCClient) SessionEnd(ctx context.Context, sessionID string, reason agent.SessionEndReason) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.SessionEnd(rpcCtx, &proto.SessionEndRequest{SessionId: sessionID, Reason: string(reason)}); err != nil {
+		log.Printf("extension SessionEnd() RPC error: %v", err)
+	}
+}
+
+func (m *GRPCClient) AgentStart(ctx context.Context) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.AgentStart(rpcCtx, &proto.Empty{}); err != nil {
+		log.Printf("extension AgentStart() RPC error: %v", err)
+	}
+}
+
+func (m *GRPCClient) AgentEnd(ctx context.Context) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.AgentEnd(rpcCtx, &proto.Empty{}); err != nil {
+		log.Printf("extension AgentEnd() RPC error: %v", err)
+	}
+}
+
+func (m *GRPCClient) TurnStart(ctx context.Context) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.TurnStart(rpcCtx, &proto.Empty{}); err != nil {
+		log.Printf("extension TurnStart() RPC error: %v", err)
+	}
+}
+
+func (m *GRPCClient) TurnEnd(ctx context.Context) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.TurnEnd(rpcCtx, &proto.Empty{}); err != nil {
+		log.Printf("extension TurnEnd() RPC error: %v", err)
+	}
+}
+
+func (m *GRPCClient) ModifyInput(ctx context.Context, text string) agent.InputResult {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	resp, err := m.client.ModifyInput(rpcCtx, &proto.ModifyInputRequest{Text: text})
+	if err != nil {
+		log.Printf("extension ModifyInput() RPC error: %v", err)
+		return agent.InputResult{Action: agent.InputContinue}
+	}
+	return agent.InputResult{
+		Action: agent.InputAction(resp.Action),
+		Text:   resp.Text,
+	}
+}
+
+func (m *GRPCClient) ModifyContext(ctx context.Context, messages []types.Message) []types.Message {
+	data, err := json.Marshal(messages)
+	if err != nil {
+		log.Printf("extension ModifyContext() marshal error: %v", err)
+		return messages
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	resp, err := m.client.ModifyContext(rpcCtx, &proto.ModifyContextRequest{MessagesJson: string(data)})
+	if err != nil {
+		log.Printf("extension ModifyContext() RPC error: %v", err)
+		return messages
+	}
+	var out []types.Message
+	if err := json.Unmarshal([]byte(resp.MessagesJson), &out); err != nil {
+		log.Printf("extension ModifyContext() unmarshal error: %v", err)
+		return messages
+	}
+	return out
+}
+
+func (m *GRPCClient) BeforeProviderRequest(ctx context.Context, req *llm.CompletionRequest) *llm.CompletionRequest {
+	data, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("extension BeforeProviderRequest() marshal error: %v", err)
+		return req
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	resp, err := m.client.BeforeProviderRequest(rpcCtx, &proto.BeforeProviderRequestRequest{RequestJson: string(data)})
+	if err != nil {
+		log.Printf("extension BeforeProviderRequest() RPC error: %v", err)
+		return req
+	}
+	var out llm.CompletionRequest
+	if err := json.Unmarshal([]byte(resp.RequestJson), &out); err != nil {
+		log.Printf("extension BeforeProviderRequest() unmarshal error: %v", err)
+		return req
+	}
+	return &out
+}
+
+func (m *GRPCClient) AfterProviderResponse(ctx context.Context, content string, numToolCalls int) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.AfterProviderResponse(rpcCtx, &proto.AfterProviderResponseRequest{
+		Content:      content,
+		NumToolCalls: int32(numToolCalls),
+	}); err != nil {
+		log.Printf("extension AfterProviderResponse() RPC error: %v", err)
+	}
+}
+
+func (m *GRPCClient) BeforeCompact(ctx context.Context, prep agent.CompactionPrep) *agent.CompactionResult {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	resp, err := m.client.BeforeCompact(rpcCtx, &proto.BeforeCompactRequest{
+		MessageCount:    int32(prep.MessageCount),
+		EstimatedTokens: int32(prep.EstimatedTokens),
+		PreviousSummary: prep.PreviousSummary,
+	})
+	if err != nil {
+		log.Printf("extension BeforeCompact() RPC error: %v", err)
+		return nil
+	}
+	if !resp.Handled {
+		return nil
+	}
+	return &agent.CompactionResult{
+		Summary:          resp.Summary,
+		FirstKeptEntryID: resp.FirstKeptEntryId,
+	}
+}
+
+func (m *GRPCClient) AfterCompact(ctx context.Context, freedTokens int) {
+	rpcCtx, cancel := context.WithTimeout(ctx, extensionRPCTimeout)
+	defer cancel()
+	if _, err := m.client.AfterCompact(rpcCtx, &proto.AfterCompactRequest{FreedTokens: int32(freedTokens)}); err != nil {
+		log.Printf("extension AfterCompact() RPC error: %v", err)
+	}
+}
+
 // RemoteTool is a tools.Tool that executes over the extension's ExecuteTool gRPC.
 type RemoteTool struct {
 	client      proto.ExtensionClient
@@ -333,4 +461,76 @@ func (m *GRPCServer) ModifySystemPrompt(ctx context.Context, req *proto.ModifySy
 	return &proto.ModifySystemPromptResponse{
 		ModifiedPrompt: m.Impl.ModifySystemPrompt(req.CurrentPrompt),
 	}, nil
+}
+
+func (m *GRPCServer) SessionStart(ctx context.Context, req *proto.SessionStartRequest) (*proto.Empty, error) {
+	m.Impl.SessionStart(ctx, req.SessionId, agent.SessionStartReason(req.Reason))
+	return &proto.Empty{}, nil
+}
+
+func (m *GRPCServer) SessionEnd(ctx context.Context, req *proto.SessionEndRequest) (*proto.Empty, error) {
+	m.Impl.SessionEnd(ctx, req.SessionId, agent.SessionEndReason(req.Reason))
+	return &proto.Empty{}, nil
+}
+
+func (m *GRPCServer) AgentStart(ctx context.Context, _ *proto.Empty) (*proto.Empty, error) {
+	m.Impl.AgentStart(ctx)
+	return &proto.Empty{}, nil
+}
+
+func (m *GRPCServer) AgentEnd(ctx context.Context, _ *proto.Empty) (*proto.Empty, error) {
+	m.Impl.AgentEnd(ctx)
+	return &proto.Empty{}, nil
+}
+
+func (m *GRPCServer) TurnStart(ctx context.Context, _ *proto.Empty) (*proto.Empty, error) {
+	m.Impl.TurnStart(ctx)
+	return &proto.Empty{}, nil
+}
+
+func (m *GRPCServer) TurnEnd(ctx context.Context, _ *proto.Empty) (*proto.Empty, error) {
+	m.Impl.TurnEnd(ctx)
+	return &proto.Empty{}, nil
+}
+
+func (m *GRPCServer) ModifyInput(ctx context.Context, req *proto.ModifyInputRequest) (*proto.ModifyInputResponse, error) {
+	result := m.Impl.ModifyInput(ctx, req.Text)
+	return &proto.ModifyInputResponse{Action: string(result.Action), Text: result.Text}, nil
+}
+
+func (m *GRPCServer) ModifyContext(ctx context.Context, req *proto.ModifyContextRequest) (*proto.ModifyContextResponse, error) {
+	out := m.Impl.ModifyContext(ctx, req.MessagesJson)
+	return &proto.ModifyContextResponse{MessagesJson: out}, nil
+}
+
+func (m *GRPCServer) BeforeProviderRequest(ctx context.Context, req *proto.BeforeProviderRequestRequest) (*proto.BeforeProviderRequestResponse, error) {
+	out := m.Impl.BeforeProviderRequest(ctx, req.RequestJson)
+	return &proto.BeforeProviderRequestResponse{RequestJson: out}, nil
+}
+
+func (m *GRPCServer) AfterProviderResponse(ctx context.Context, req *proto.AfterProviderResponseRequest) (*proto.Empty, error) {
+	m.Impl.AfterProviderResponse(ctx, req.Content, int(req.NumToolCalls))
+	return &proto.Empty{}, nil
+}
+
+func (m *GRPCServer) BeforeCompact(ctx context.Context, req *proto.BeforeCompactRequest) (*proto.BeforeCompactResponse, error) {
+	prep := agent.CompactionPrep{
+		MessageCount:    int(req.MessageCount),
+		EstimatedTokens: int(req.EstimatedTokens),
+		PreviousSummary: req.PreviousSummary,
+	}
+	result := m.Impl.BeforeCompact(ctx, prep)
+	if result == nil {
+		return &proto.BeforeCompactResponse{Handled: false}, nil
+	}
+	return &proto.BeforeCompactResponse{
+		Handled:           true,
+		Summary:           result.Summary,
+		FirstKeptEntryId:  result.FirstKeptEntryID,
+	}, nil
+}
+
+func (m *GRPCServer) AfterCompact(ctx context.Context, req *proto.AfterCompactRequest) (*proto.Empty, error) {
+	m.Impl.AfterCompact(ctx, int(req.FreedTokens))
+	return &proto.Empty{}, nil
 }

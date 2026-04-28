@@ -360,6 +360,20 @@ func (a *Agent) SetSession(mgr *session.Manager, sess *session.Session) {
 		a.state.Session.ID = sess.ID
 		a.state.Session.Name = sess.Name
 	}
+
+	if sess != nil {
+		reason := SessionStartResume
+		if len(sess.Messages) == 0 {
+			reason = SessionStartNew
+		}
+		sessID := sess.ID
+		for _, ext := range a.extensions {
+			func() {
+				defer func() { _ = recover() }()
+				ext.SessionStart(context.Background(), sessID, reason)
+			}()
+		}
+	}
 }
 
 // SetExtensions sets the active extensions for the agent.
@@ -401,6 +415,39 @@ func (a *Agent) Prompt(ctx context.Context, text string, images ...Image) error 
 	a.doneOnce = sync.Once{}
 	a.stopping.Store(false)
 
+	// Run ModifyInput hooks — extensions may transform or consume the user text.
+	a.mu.RLock()
+	exts := a.extensions
+	sessID := a.state.Session.ID
+	hasSess := a.sess != nil
+	a.mu.RUnlock()
+
+	for _, ext := range exts {
+		res := func() InputResult {
+			defer func() { _ = recover() }()
+			return ext.ModifyInput(ctx, text)
+		}()
+		switch res.Action {
+		case InputHandled:
+			// Extension consumed the input entirely.
+			a.events.Publish(Event{Type: EventAgentEnd})
+			a.closeDone()
+			return nil
+		case InputTransform:
+			text = res.Text
+		}
+	}
+
+	// Fire SessionStart for sessionless agents on their first prompt.
+	if !hasSess {
+		for _, ext := range exts {
+			func() {
+				defer func() { _ = recover() }()
+				ext.SessionStart(ctx, sessID, SessionStartNew)
+			}()
+		}
+	}
+
 	// Add user message
 	msg := Message{Role: "user", Content: text, Timestamp: time.Now()}
 	if len(images) > 0 {
@@ -423,8 +470,14 @@ func (a *Agent) Prompt(ctx context.Context, text string, images ...Image) error 
 	}
 	a.mu.Unlock()
 
-	// Emit event
+	// Emit event and fire AgentStart hook.
 	a.events.Publish(Event{Type: EventAgentStart})
+	for _, ext := range exts {
+		func() {
+			defer func() { _ = recover() }()
+			ext.AgentStart(ctx)
+		}()
+	}
 
 	go a.runTurn(ctx)
 
@@ -547,8 +600,16 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 		if freed > 0 {
 			content = fmt.Sprintf("Context compacted. Freed %d tokens.", freed)
 		}
+		freedVal := freed
+		compactExts := a.extensions
 		a.mu.Unlock()
-		a.events.Publish(Event{Type: EventCompactEnd, Value: int64(freed), Content: content})
+		a.events.Publish(Event{Type: EventCompactEnd, Value: int64(freedVal), Content: content})
+		for _, ext := range compactExts {
+			func() {
+				defer func() { _ = recover() }()
+				ext.AfterCompact(ctx, freedVal)
+			}()
+		}
 	}()
 
 	tokensBefore := a.estimateContextTokensNoLock()
@@ -619,6 +680,25 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 	}
 
 	// 6. Generate Summaries via LLM
+	// Allow extensions to provide a custom compaction result and skip the LLM call.
+	prep := CompactionPrep{
+		MessageCount:    len(messagesToSummarize),
+		EstimatedTokens: tokensBefore,
+		PreviousSummary: previousSummary,
+	}
+	var customCompaction *CompactionResult
+	for _, ext := range a.extensions {
+		func() {
+			defer func() { _ = recover() }()
+			if r := ext.BeforeCompact(ctx, prep); r != nil {
+				customCompaction = r
+			}
+		}()
+		if customCompaction != nil {
+			break
+		}
+	}
+
 	// Cap compaction at 60 s so a slow provider cannot hold the agent in a
 	// non-abortable state for an unbounded duration (Fix 8a).
 	compactCtx, compactCancel := context.WithTimeout(ctx, 60*time.Second)
@@ -626,14 +706,19 @@ func (a *Agent) Compact(ctx context.Context, keepRecentTokens int) {
 
 	summaryChan := make(chan string, 1)
 	errChan := make(chan error, 1)
-	go func() {
-		s, err := a.generateSummary(compactCtx, messagesToSummarize, previousSummary)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		summaryChan <- s
-	}()
+	if customCompaction != nil {
+		// Extension provided a summary — skip LLM summarization.
+		summaryChan <- customCompaction.Summary
+	} else {
+		go func() {
+			s, err := a.generateSummary(compactCtx, messagesToSummarize, previousSummary)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			summaryChan <- s
+		}()
+	}
 
 	var turnPrefixSummary string
 	if cutResult.IsSplitTurn {
@@ -1087,7 +1172,7 @@ func (a *Agent) ResetSession(id string) {
 		return
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	oldID := a.state.Session.ID
 	a.state.Messages = nil
 	a.state.SteerQueue = nil
 	a.state.FollowUpQueue = nil
@@ -1095,6 +1180,16 @@ func (a *Agent) ResetSession(id string) {
 	a.state.Session.CreatedAt = time.Now()
 	a.state.Session.UpdatedAt = time.Now()
 	a.state.Session.Name = ""
+	exts := a.extensions
+	a.mu.Unlock()
+
+	for _, ext := range exts {
+		func() {
+			defer func() { _ = recover() }()
+			ext.SessionEnd(context.Background(), oldID, SessionEndReset)
+		}()
+	}
+
 	a.events.Publish(Event{Type: EventQueueUpdate})
 }
 

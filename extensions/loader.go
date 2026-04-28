@@ -8,17 +8,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"time"
 
-	"github.com/hashicorp/go-plugin"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
+	proto "github.com/goppydae/gollm/extensions/gen"
 	"github.com/goppydae/gollm/internal/agent"
 )
+
+// extProc tracks a running extension subprocess and its gRPC connection.
+type extProc struct {
+	cmd        *exec.Cmd
+	conn       *grpc.ClientConn
+	socketPath string
+}
 
 // Loader discovers and loads extensions (executable binaries and scripts).
 type Loader struct {
 	Dirs       []string
 	PythonPath string
-	Clients    []*plugin.Client
+	procs      []*extProc
 }
 
 // NewLoader creates a new extension loader.
@@ -111,45 +121,58 @@ func LoadErrors(errs []error) error {
 	return errors.Join(errs...)
 }
 
-// Cleanup kills all running extension subprocesses.
+// Cleanup kills all running extension subprocesses and removes their socket files.
 func (l *Loader) Cleanup() {
-	for _, c := range l.Clients {
-		c.Kill()
+	for _, p := range l.procs {
+		_ = p.conn.Close()
+		_ = p.cmd.Process.Kill()
+		_ = p.cmd.Wait()
+		_ = os.Remove(p.socketPath)
 	}
 }
 
 func (l *Loader) launchExtension(path string) (agent.Extension, error) {
-	var cmd *exec.Cmd
+	socketPath := filepath.Join(os.TempDir(),
+		fmt.Sprintf("gollm-ext-%d-%d.sock", os.Getpid(), len(l.procs)))
 
+	var cmd *exec.Cmd
 	if filepath.Ext(path) == ".py" {
 		cmd = exec.Command(l.PythonPath, path) // #nosec G204 — path is a discovered file, PythonPath is user config
 	} else {
 		cmd = exec.Command(path) // #nosec G204 — path is a discovered file from configured extension dirs
 	}
+	cmd.Env = append(os.Environ(), "GOLLM_SOCKET_PATH="+socketPath)
+	cmd.Stderr = os.Stderr
 
-	client := plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig: HandshakeConfig,
-		Plugins:         PluginMap,
-		Cmd:             cmd,
-		AllowedProtocols: []plugin.Protocol{
-			plugin.ProtocolGRPC,
-		},
-	})
-
-	rpcClient, err := client.Client()
-	if err != nil {
-		client.Kill()
-		return nil, err
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start %s: %w", path, err)
 	}
 
-	raw, err := rpcClient.Dispense("extension")
-	if err != nil {
-		client.Kill()
-		return nil, err
+	if err := waitForSocket(socketPath, 10*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("extension %s did not become ready: %w", path, err)
 	}
 
-	// Track the client so we can kill it on Cleanup.
-	l.Clients = append(l.Clients, client)
+	conn, err := grpc.NewClient("unix://"+socketPath,
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("dial %s: %w", socketPath, err)
+	}
 
-	return raw.(agent.Extension), nil
+	l.procs = append(l.procs, &extProc{cmd: cmd, conn: conn, socketPath: socketPath})
+	return &GRPCClient{client: proto.NewExtensionClient(conn)}, nil
+}
+
+func waitForSocket(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for socket %s after %s", path, timeout)
 }

@@ -244,7 +244,8 @@ func (m *model) applyHistorySync(msgs []*pb.ConversationMessage) {
 	for i := len(m.history) - 1; i >= 0; i-- {
 		entry := m.history[i]
 		// Preserve trailing assistant messages if running, or any notice boxes
-		isNotice := entry.role == "info" || entry.role == "success" || entry.role == "warning" || entry.role == "error" || entry.role == "system" || entry.role == "compaction"
+		isInProgressCompaction := entry.role == "compaction" && m.isCompacting.Load()
+		isNotice := entry.role == "info" || entry.role == "success" || entry.role == "warning" || entry.role == "error" || entry.role == "system" || isInProgressCompaction
 		if (m.isRunning && entry.role == "assistant") || isNotice {
 			trailingMeta = append([]historyEntry{entry}, trailingMeta...)
 			continue

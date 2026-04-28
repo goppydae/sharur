@@ -219,7 +219,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.historyIndex = -1
 		m.draftInput = ""
 		m.vp.SetHeight(m.vpHeight())
-		return m, nil
+		var cmds []tea.Cmd
+		if m.isRunning || m.isCompacting.Load() {
+			m.isRunning = false
+			m.isCompacting.Store(false)
+			cmds = append(cmds, m.stopwatch.Stop(), m.stopwatch.Reset())
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	if m.modal.visible {
@@ -243,7 +249,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.isRunning || m.isCompacting.Load() {
 			_, _ = m.client.Abort(context.Background(), &pb.AbortRequest{SessionId: m.sessionID})
 			m.cancel()
-			return m, nil
+			m.isRunning = false
+			m.isCompacting.Store(false)
+			return m, tea.Batch(m.stopwatch.Stop(), m.stopwatch.Reset())
 		}
 		return m, nil
 	}

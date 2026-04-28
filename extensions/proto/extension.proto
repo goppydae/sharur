@@ -12,6 +12,19 @@ service Extension {
   rpc AfterToolCall(AfterToolCallRequest) returns (AfterToolCallResponse);
   rpc BeforeToolCall(BeforeToolCallRequest) returns (BeforeToolCallResponse);
   rpc ModifySystemPrompt(ModifySystemPromptRequest) returns (ModifySystemPromptResponse);
+
+  rpc SessionStart(SessionStartRequest) returns (Empty);
+  rpc SessionEnd(SessionEndRequest) returns (Empty);
+  rpc AgentStart(Empty) returns (Empty);
+  rpc AgentEnd(Empty) returns (Empty);
+  rpc TurnStart(Empty) returns (Empty);
+  rpc TurnEnd(Empty) returns (Empty);
+  rpc ModifyInput(ModifyInputRequest) returns (ModifyInputResponse);
+  rpc ModifyContext(ModifyContextRequest) returns (ModifyContextResponse);
+  rpc BeforeProviderRequest(BeforeProviderRequestRequest) returns (BeforeProviderRequestResponse);
+  rpc AfterProviderResponse(AfterProviderResponseRequest) returns (Empty);
+  rpc BeforeCompact(BeforeCompactRequest) returns (BeforeCompactResponse);
+  rpc AfterCompact(AfterCompactRequest) returns (Empty);
 }
 
 message Empty {}
@@ -91,4 +104,71 @@ message ModifySystemPromptRequest {
 
 message ModifySystemPromptResponse {
   string modified_prompt = 1;
+}
+
+// Session lifecycle
+
+message SessionStartRequest {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message SessionEndRequest {
+  string session_id = 1;
+  string reason = 2;
+}
+
+// Input transformation
+
+message ModifyInputRequest {
+  string text = 1;
+}
+
+message ModifyInputResponse {
+  // action: "continue" | "transform" | "handled"
+  string action = 1;
+  string text = 2;
+}
+
+// Context transformation (messages serialized as JSON array)
+
+message ModifyContextRequest {
+  string messages_json = 1;
+}
+
+message ModifyContextResponse {
+  string messages_json = 1;
+}
+
+// Provider request/response
+
+message BeforeProviderRequestRequest {
+  string request_json = 1;
+}
+
+message BeforeProviderRequestResponse {
+  string request_json = 1;
+}
+
+message AfterProviderResponseRequest {
+  string content = 1;
+  int32 num_tool_calls = 2;
+}
+
+// Compaction
+
+message BeforeCompactRequest {
+  int32 message_count = 1;
+  int32 estimated_tokens = 2;
+  string previous_summary = 3;
+}
+
+message BeforeCompactResponse {
+  bool handled = 1;
+  string summary = 2;
+  string first_kept_entry_id = 3;
+}
+
+message AfterCompactRequest {
+  int32 freed_tokens = 1;
 }

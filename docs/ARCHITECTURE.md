@@ -300,34 +300,84 @@ This mirrors the `content[]` array model, ensuring correct temporal ordering of 
 
 ## Extensions
 
-Extensions implement the `agent.Extension` interface:
+Extensions implement the `agent.Extension` interface. `NoopExtension` provides no-op defaults for every method; concrete extensions embed it and override only what they need.
 
 ```go
 type Extension interface {
-    // Name returns the extension's unique identifier.
+    // --- Load-time ---
     Name() string
-
-    // Tools returns additional tools to register with the agent.
     Tools() []tools.Tool
 
-    // BeforePrompt is called before each LLM request.
-    BeforePrompt(ctx context.Context, state *AgentState) *AgentState
+    // --- Session lifecycle ---
+    SessionStart(ctx context.Context, sessionID string, reason SessionStartReason)
+    SessionEnd(ctx context.Context, sessionID string, reason SessionEndReason)
 
-    // BeforeToolCall is called before each tool execution.
-    // Return (result, true) to intercept; (nil, false) to allow normal execution.
-    BeforeToolCall(ctx context.Context, call *ToolCall, args json.RawMessage) (*tools.ToolResult, bool)
+    // --- Agent/turn lifecycle ---
+    AgentStart(ctx context.Context)
+    AgentEnd(ctx context.Context)
+    TurnStart(ctx context.Context)
+    TurnEnd(ctx context.Context)
 
-    // AfterToolCall is called after each tool call completes.
-    AfterToolCall(ctx context.Context, call *ToolCall, result *tools.ToolResult) *tools.ToolResult
-
-    // ModifySystemPrompt augments the system prompt before each turn.
+    // --- Transformation hooks (return modified values) ---
+    ModifyInput(ctx context.Context, text string) InputResult
     ModifySystemPrompt(prompt string) string
+    BeforePrompt(ctx context.Context, state *AgentState) *AgentState
+    ModifyContext(ctx context.Context, messages []types.Message) []types.Message
+    BeforeProviderRequest(ctx context.Context, req *llm.CompletionRequest) *llm.CompletionRequest
+    AfterProviderResponse(ctx context.Context, content string, numToolCalls int)
+    BeforeToolCall(ctx context.Context, call *ToolCall, args json.RawMessage) (*tools.ToolResult, bool)
+    AfterToolCall(ctx context.Context, call *ToolCall, result *tools.ToolResult) *tools.ToolResult
+    BeforeCompact(ctx context.Context, prep CompactionPrep) *CompactionResult
+    AfterCompact(ctx context.Context, freedTokens int)
 }
 ```
 
-Two extension types are supported:
+### Hook execution order per prompt
 
-1. **gRPC extensions** (`extensions/grpc.go`) — External processes connected via hashicorp/go-plugin gRPC. The loader launches the process, performs the handshake, and wraps its tools as native `Tool` implementations. Use `extensions.HandshakeConfig`, `extensions.ExtensionPlugin`, and `extensions.NoopPlugin` from `github.com/goppydae/gollm/extensions`. Plugin tools declare read-only semantics via the `IsReadOnly bool` field on `extensions.ToolDefinition`; this propagates to the internal `RemoteTool.IsReadOnly()` so dry-run mode and sandbox extensions can honour it correctly.
+```
+ModifyInput          ← user text may be transformed or consumed (InputHandled stops processing)
+SessionStart         ← once per new/resumed session
+AgentStart           ← once per Prompt() call
+  per LLM turn:
+    BeforePrompt       ← modify model/provider/thinking
+    ModifySystemPrompt ← augment system prompt text
+    ModifyContext      ← filter/inject messages sent to LLM (transcript unchanged)
+    BeforeProviderRequest ← modify CompletionRequest fields
+    [LLM stream]
+    AfterProviderResponse
+    TurnStart
+    per tool call:
+      BeforeToolCall   ← intercept/block; return (result,true) to skip execution
+      [tool executes]
+      AfterToolCall    ← observe/modify result
+    TurnEnd
+  [loop until no tool calls]
+AgentEnd
+```
+
+Compaction hooks fire separately from the main turn loop:
+```
+BeforeCompact  ← return *CompactionResult to skip LLM summarization
+[LLM summarization if BeforeCompact returns nil]
+AfterCompact   ← receives freed token count
+```
+
+### Supporting types
+
+```go
+type InputAction   string  // "continue" | "transform" | "handled"
+type InputResult   struct { Action InputAction; Text string }
+
+type CompactionPrep   struct { MessageCount, EstimatedTokens int; PreviousSummary string }
+type CompactionResult struct { Summary, FirstKeptEntryID string }
+
+type SessionStartReason string  // "new" | "resume"
+type SessionEndReason   string  // "reset"
+```
+
+### Extension types
+
+1. **gRPC extensions** (`extensions/grpc.go`) — External processes connected via Unix Domain Socket gRPC. The loader launches the process, passes `GOLLM_SOCKET_PATH` via env, waits for the socket file to appear (the plugin signals readiness by calling `net.Listen`), then dials gRPC and wraps its tools as native `Tool` implementations. Use `extensions.Serve(yourPlugin)` and `extensions.NoopPlugin` from `github.com/goppydae/gollm/extensions`. All hooks in the `Plugin` interface map 1:1 to the `agent.Extension` interface and are transported over the generated proto RPCs in `extensions/proto/extension.proto`. Plugin tools declare read-only semantics via the `IsReadOnly bool` field on `extensions.ToolDefinition`; this propagates to the internal `RemoteTool.IsReadOnly()` so dry-run mode and sandbox extensions can honour it correctly.
 2. **Skills** (`internal/skills`) — Markdown files discovered from `.gollm/skills/` that are injected into the system prompt or sent as user messages via `/skill:<name>`.
 
 ---
@@ -347,7 +397,19 @@ ag.Prompt(ctx, "Hello")
 <-ag.Idle()
 ```
 
-The SDK re-exports core types (`Agent`, `Event`, `EventType`, `Tool`, `ThinkingLevel`, `Extension`) so consumers only need to import `gollm/sdk`.
+The SDK re-exports core types so consumers only need to import `gollm/sdk`:
+
+| Type / Constant | Description |
+|---|---|
+| `Agent`, `Event`, `EventType` | Core agent types |
+| `Tool`, `ToolResult` | Tool interface and result |
+| `Extension` | Extension interface (alias of `agent.Extension`) |
+| `ThinkingLevel`, `ThinkingOff/Low/Medium/High` | Reasoning budget |
+| `InputAction`, `InputResult` | `ModifyInput` hook return type |
+| `InputContinue`, `InputTransform`, `InputHandled` | `InputAction` constants |
+| `CompactionPrep`, `CompactionResult` | `BeforeCompact` hook types |
+| `SessionStartReason`, `SessionStartNew/Resume` | Session lifecycle |
+| `SessionEndReason`, `SessionEndReset` | Session lifecycle |
 
 ---
 
@@ -389,14 +451,25 @@ User Input
     ↓
 agent.Prompt(ctx, text)
     ↓
+ext.ModifyInput()        ← transform or consume user text
+ext.SessionStart()       ← once per new/resumed session (sessionless agents only)
+ext.AgentStart()
+EventAgentStart
+    ↓
 runTurn loop
-    ├── ext.ModifySystemPrompt() / ext.BeforePrompt()
+    ├── ext.BeforePrompt() / ext.ModifySystemPrompt()
+    ├── ext.ModifyContext()          ← filter/inject LLM-bound messages
+    ├── ext.BeforeProviderRequest()  ← modify CompletionRequest
     ├── llm.Provider.Stream()  → EventTextDelta / EventThinkingDelta / EventToolCall
+    ├── ext.AfterProviderResponse()
+    ├── EventTurnStart / ext.TurnStart()
     ├── ext.BeforeToolCall() / execTool() / ext.AfterToolCall()
     │        → EventToolDelta / EventToolOutput
+    ├── ext.TurnEnd()
     └── loop until no tool calls
     ↓
 EventAgentEnd
+ext.AgentEnd()
     ↓
 internal/service (saves session on AgentEnd)
     ↓
