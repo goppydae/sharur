@@ -29,10 +29,9 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Full Build and Verification
+        # mage all: generate → build → test (with coverage) → vet → lint → vuln
+        # coverage.out is written by the Test() mage target for the next steps.
         run: nix develop -c mage all
-
-      - name: Test with Coverage
-        run: nix develop -c go test -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Coverage Summary
         run: nix develop -c go tool cover -func=coverage.out

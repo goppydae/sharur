@@ -39,6 +39,10 @@
               export GOPATH="${"$HOME"}/go"
               export GOMODCACHE="${"$HOME"}/go/pkg/mod"
               export GOPROXY="https://proxy.golang.org,direct"
+              # Isolate the build cache from any system Go toolchain so that
+              # coverage compilation does not pick up stdlib artifacts compiled
+              # by a different Go version (e.g. the distro Go on CI runners).
+              export GOCACHE="${"$HOME"}/.cache/go-build-nix"
             '';
           };
         }

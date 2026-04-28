@@ -134,10 +134,24 @@ func getVersion() string {
 
 // Run tests with coverage.
 func Test() error {
-	args := []string{"test", "-v", "./..."}
-	if os.Getenv("COVERAGE") != "" {
-		args = append([]string{"test", "-coverprofile=coverage.out", "-v", "./..."})
+	// Enumerate only packages that have test files. Running `go test -coverprofile`
+	// on packages without test files (internal/gen, internal/service, …) forces
+	// coverage-mode compilation of stdlib, which fails when the Nix toolchain
+	// version differs from whatever system Go pre-populated the build cache.
+	// Both TestGoFiles (same-package tests) and XTestGoFiles (external _test
+	// packages, e.g. grpcserver_test) must be checked.
+	out, err := exec.Command("go", "list",
+		"-f", "{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}",
+		"./...").Output()
+	if err != nil {
+		return fmt.Errorf("go list: %w", err)
 	}
+	pkgs := strings.Fields(string(out))
+	if len(pkgs) == 0 {
+		return nil
+	}
+	args := []string{"test", "-coverprofile=coverage.out", "-covermode=atomic", "-v"}
+	args = append(args, pkgs...)
 	return execCmd("go", args...)
 }
 
