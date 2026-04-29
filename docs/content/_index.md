@@ -9,6 +9,14 @@ description: gollm developer documentation
 
 > A Golem is designed to be a tireless servant to its creator. Brought to life through ritual, created entirely from inanimate matter. It performs physical labor or provides protection.
 
+<div style="text-align: center">
+
+[![CI](https://github.com/goppydae/gollm/actions/workflows/ci.yml/badge.svg?classes=inline)](https://github.com/goppydae/gollm/actions/workflows/ci.yml) [![Coverage](https://codecov.io/gh/goppydae/gollm/branch/main/graph/badge.svg?classes=inline)](https://codecov.io/gh/goppydae/gollm) [![Go Reference](https://pkg.go.dev/badge/github.com/goppydae/gollm.svg?classes=inline)](https://pkg.go.dev/github.com/goppydae/gollm) [![Go Report Card](https://goreportcard.com/badge/github.com/goppydae/gollm?classes=inline)](https://goreportcard.com/report/github.com/goppydae/gollm)
+
+[![Latest Release](https://img.shields.io/github/v/release/goppydae/gollm?classes=inline)](https://github.com/goppydae/gollm/releases/latest) [![Go Version](https://img.shields.io/badge/go-1.26.2+-blue?classes=inline)](https://go.dev/dl/) [![License](https://img.shields.io/github/license/goppydae/gollm?classes=inline)](https://github.com/goppydae/gollm/blob/main/LICENSE)
+
+</div>
+
 ---
 
 ## Core Philosophy
