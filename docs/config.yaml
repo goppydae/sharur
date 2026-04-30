@@ -11,11 +11,35 @@ params:
     - auto:
         - zen-light
         - zen-dark
-  disableBreadcrumb: false
+  disableRootBreadcrumb: false
+  disableTermBreadcrumbs: false
   disableNextPrev: false
+  titleSeparator: "-"
   search:
     disable: false
   editURL: https://github.com/goppydae/gollm/edit/main/docs/content/
+
+  sidebarheadermenus:
+    - type: divider
+    - identifier: headercontrols
+      type: custom
+      elements:
+        - type: homelink
+        - type: githublink
+          url: "https://github.com/goppydae/gollm"
+          label: GitHub
+        - type: pkgsite
+          repo: "github.com/goppydae/gollm"
+    - type: divider
+
+  sidebarfootermenus:
+    - type: divider
+    - identifier: footercontrols
+      elements:
+        - type: historyclearer
+        - type: variantswitcher
+        - type: languageswitcher
+      type: custom
 
 markup:
   goldmark:
