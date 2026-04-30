@@ -1,6 +1,6 @@
 ---
 title: Provider Setup
-weight: 35
+weight: 20
 description: Configuring each LLM provider — API keys, base URLs, model names, and env vars
 ---
 

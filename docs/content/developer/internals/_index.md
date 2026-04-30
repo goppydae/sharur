@@ -1,6 +1,6 @@
 ---
 title: Internals
-weight: 40
+weight: 20
 description: Architecture overview of gollm's components and data flow
 ---
 

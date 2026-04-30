@@ -1,6 +1,6 @@
 ---
 title: Configuration
-weight: 40
+weight: 10
 description: config.json schema, layering, and CLI flag reference
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: gRPC Mode
-weight: 30
+weight: 50
 description: Persistent multi-session gRPC service
 ---
 

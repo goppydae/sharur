@@ -1,6 +1,6 @@
 ---
 title: TUI
-weight: 10
+weight: 30
 description: Keybindings, slash commands, bang commands, and at-file attachments
 ---
 

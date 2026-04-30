@@ -1,6 +1,6 @@
 ---
 title: JSON Mode
-weight: 20
+weight: 40
 description: One-shot CLI with line-delimited JSON event output
 ---
 
