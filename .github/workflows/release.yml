@@ -3,7 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
+      # Match examples: v0.1.0 v0.1.0-p v0.1.0-p-1 v0.1.0-proto-1
+      - "v[0-9]+.[0-9]+.[0-9]+(-[a-zA-Z]+)?(-[0-9]+)?"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -17,15 +18,15 @@ jobs:
     steps:
       - name: Checkout Workspace
         uses: actions/checkout@v4
-      
+
       - name: Synchronize Environment (Nix)
         uses: cachix/install-nix-action@v30
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-      
+
       - name: Build Release Assets
         run: nix develop -c mage release
-      
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
