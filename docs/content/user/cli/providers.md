@@ -28,7 +28,7 @@ Both forms are equivalent. The shorthand is convenient for one-off overrides; th
 
 ## Environment Variables
 
-API keys set via environment variable take priority over values in `config.json`. The env var names use the `GOLLM_` prefix:
+API keys set via environment variable take priority over values in `config.json`. The env var names use the `SHARUR_` prefix:
 
 | Provider | Environment Variable |
 |---|---|

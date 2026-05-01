@@ -121,7 +121,7 @@ LoadErrors joins all errors from a Load call into a single error, or nil if ther
 func Serve(impl Plugin)
 ```
 
-Serve starts a gRPC server on the Unix socket path provided via GOLLM\_SOCKET\_PATH. This is the entry point for extension binaries.
+Serve starts a gRPC server on the Unix socket path provided via SHARUR\_SOCKET\_PATH. This is the entry point for extension binaries.
 
 <a name="AgentState"></a>
 ## type AgentState
