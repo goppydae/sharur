@@ -23,7 +23,7 @@ params:
   themeVariant:
     - auto:
         - zen-light
-        - zen-dark
+        - github-dark
   disableRootBreadcrumb: false
   disableTermBreadcrumbs: false
   disableNextPrev: false
@@ -65,7 +65,7 @@ markup:
     renderer:
       unsafe: true
   highlight:
-    style: monokai
+    noClasses: false
 
 outputs:
   home:
